@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState } from 'react';
 import { authApi } from '../services/api';
+import { getAvatarUrl } from '../constants/avatar';
 
 const AuthContext = createContext();
 
@@ -27,7 +28,18 @@ export const AuthProvider = ({ children }) => {
       return null;
     }
     const saved = localStorage.getItem('unimate_portal_user');
-    return saved ? JSON.parse(saved) : null;
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed) {
+          parsed.avatar = getAvatarUrl(parsed.avatar);
+          return parsed;
+        }
+      } catch {
+        return null;
+      }
+    }
+    return null;
   });
 
   const login = async (email, password, role = 'user') => {
@@ -50,7 +62,7 @@ export const AuthProvider = ({ children }) => {
       name: dbUser.fullName,
       email: dbUser.email,
       role: normalizedRole,
-      avatar: dbUser.avatar || null,
+      avatar: getAvatarUrl(dbUser.avatar),
       studentId: dbUser.studentId || dbUser.studentProfile?.studentId || '',
       university: dbUser.university || dbUser.studentProfile?.university || '',
       major: dbUser.major || dbUser.studentProfile?.major || '',
@@ -99,7 +111,7 @@ export const AuthProvider = ({ children }) => {
       name: dbUser.fullName,
       email: dbUser.email,
       role: normalizedRole,
-      avatar: dbUser.avatar || null,
+      avatar: getAvatarUrl(dbUser.avatar),
       studentId: userData.studentId || dbUser.studentProfile?.studentId || '',
       university: userData.university || dbUser.studentProfile?.university || '',
       major: userData.major || dbUser.studentProfile?.major || '',
@@ -124,7 +136,11 @@ export const AuthProvider = ({ children }) => {
 
   // Cập nhật thông tin user sau khi onboarding / chỉnh sửa hồ sơ
   const updateUser = (newData) => {
-    const merged = { ...user, ...newData };
+    const formattedData = { ...newData };
+    if (formattedData.avatar) {
+      formattedData.avatar = getAvatarUrl(formattedData.avatar);
+    }
+    const merged = { ...user, ...formattedData };
     setUser(merged);
     localStorage.setItem('unimate_portal_user', JSON.stringify(merged));
   };

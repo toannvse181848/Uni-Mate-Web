@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import logoIcon from '../assets/logo-icon.png';
 import { useAuth } from '../context/AuthContext';
 import { chatApi, voucherApi } from '../services/api';
+import { getAvatarUrl } from '../constants/avatar';
 import {
   Compass,
   Coffee,
@@ -163,7 +164,7 @@ export default function UserLayout() {
           <div style={{ padding: '12px 14px', backgroundColor: 'rgba(20, 184, 166, 0.12)', borderRadius: '12px', border: '1px solid rgba(45, 212, 191, 0.25)', display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{ position: 'relative' }}>
               <img
-                src={user?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200'}
+                src={getAvatarUrl(user?.avatar)}
                 alt="Avatar"
                 style={{ width: '42px', height: '42px', borderRadius: '50%', objectFit: 'cover', border: '2px solid #FF8A50' }}
               />
@@ -292,7 +293,7 @@ export default function UserLayout() {
             </div>
             <NavLink to="/user/profile">
               <img
-                src={user?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200'}
+                src={getAvatarUrl(user?.avatar)}
                 alt="Avatar"
                 style={{ width: '36px', height: '36px', borderRadius: '50%', objectFit: 'cover', border: '2px solid #FF5722', display: 'block' }}
               />

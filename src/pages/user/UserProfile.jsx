@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { userApi, authApi } from '../../services/api';
+import { getAvatarUrl } from '../../constants/avatar';
 import {
   GraduationCap,
   ShieldCheck,
@@ -236,7 +237,7 @@ export default function UserProfile() {
               {/* Avatar with Upload button badge */}
               <div style={{ position: 'relative' }}>
                 <img
-                  src={user?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200'}
+                  src={getAvatarUrl(user?.avatar)}
                   alt="Avatar"
                   style={{
                     width: '80px',

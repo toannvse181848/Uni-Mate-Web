@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { userApi, matchApi, onboardingApi } from '../../services/api';
 import { formatStudentYear } from '../../constants/academic';
+import { getAvatarUrl, DEFAULT_AVATAR } from '../../constants/avatar';
 
 
 export default function UserDiscover() {
@@ -69,10 +70,11 @@ export default function UserDiscover() {
             year: u.year || profile.year || 'Sinh viên năm 3',
             studentId: profile.studentId || u.studentId || '',
             avatar:
-              u.avatar ||
-              (idx % 2 === 0
-                ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500'
-                : 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=500'),
+              u.avatar
+                ? getAvatarUrl(u.avatar)
+                : (idx % 2 === 0
+                  ? DEFAULT_AVATAR
+                  : 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=500'),
             distance: `${(Math.random() * 2.5 + 0.4).toFixed(1)} km`,
             trustScore: u.trustScore || profile.trustScore || 96,
             matchPercentage: isReco ? u.matchPercentage : 85 - (idx * 2 % 25),
