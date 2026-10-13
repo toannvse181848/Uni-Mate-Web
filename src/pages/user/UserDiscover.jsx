@@ -77,6 +77,8 @@ export default function UserDiscover() {
                   : 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=500'),
             distance: `${(Math.random() * 2.5 + 0.4).toFixed(1)} km`,
             trustScore: u.trustScore || profile.trustScore || 96,
+            isVerifiedStudent: Boolean(u.isVerifiedStudent || u.isPremium || profile.isVerifiedStudent || profile.isPremium),
+            isPremium: Boolean(u.isPremium || profile.isPremium),
             matchPercentage: isReco ? u.matchPercentage : 85 - (idx * 2 % 25),
             commonTags: u.commonTags || [],
             bio:
@@ -512,8 +514,13 @@ export default function UserDiscover() {
                       color: '#FFFFFF',
                     }}
                   >
-                    <div style={{ fontSize: '19px', fontWeight: '800' }}>
-                      {student.name}
+                    <div style={{ fontSize: '19px', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <span>{student.name}</span>
+                      {student.isVerifiedStudent && (
+                        <span title="Tài khoản Premium (Đã xác minh tích xanh)">
+                          <CheckCircle2 size={17} color="#38BDF8" fill="#0284C7" />
+                        </span>
+                      )}
                       {student.studentId && (
                         <span
                           style={{

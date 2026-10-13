@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState } from 'react';
-import { authApi } from '../services/api';
+import { authApi, userApi } from '../services/api';
 import { getAvatarUrl } from '../constants/avatar';
 
 const AuthContext = createContext();
@@ -70,7 +70,15 @@ export const AuthProvider = ({ children }) => {
       businessName: dbUser.partnerProfile?.businessName || '',
       status: dbUser.status || 'active',
       uniCoin: dbUser.uniCoin || 0,
-      isVerifiedStudent: dbUser.isVerifiedStudent || false,
+      isPremium: Boolean(dbUser.isPremium || dbUser.studentProfile?.isPremium),
+      premiumPlan: dbUser.premiumPlan || dbUser.studentProfile?.premiumPlan || null,
+      premiumExpiresAt: dbUser.premiumExpiresAt || dbUser.studentProfile?.premiumExpiresAt || null,
+      isVerifiedStudent: Boolean(
+        dbUser.isPremium ||
+        dbUser.isVerifiedStudent ||
+        dbUser.studentProfile?.isPremium ||
+        dbUser.studentProfile?.isVerifiedStudent
+      ),
       trustScore: dbUser.trustScore || 0,
       interests: dbUser.studentProfile?.interests || [],
       bio: dbUser.studentProfile?.bio || '',
@@ -145,8 +153,17 @@ export const AuthProvider = ({ children }) => {
     localStorage.setItem('unimate_portal_user', JSON.stringify(merged));
   };
 
+  // Nâng cấp tài khoản Premium để nhận tích xanh xác thực
+  const upgradePremium = async (plan = 'monthly', paymentMethod = 'coin') => {
+    const res = await userApi.buyPremium({ plan, paymentMethod });
+    if (res?.data?.user) {
+      updateUser(res.data.user);
+    }
+    return res;
+  };
+
   return (
-    <AuthContext.Provider value={{ user, login, register, logout, setUser, updateUser }}>
+    <AuthContext.Provider value={{ user, login, register, logout, setUser, updateUser, upgradePremium }}>
       {children}
     </AuthContext.Provider>
   );

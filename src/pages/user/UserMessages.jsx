@@ -751,7 +751,9 @@ export default function UserMessages() {
                             >
                               {chat.buddy?.fullName}
                             </span>
-                            <CheckCircle2 size={13} color="#0284C7" />
+                            {Boolean(chat.buddy?.isVerifiedStudent || chat.buddy?.isPremium) && (
+                              <CheckCircle2 size={13} color="#0284C7" />
+                            )}
                           </div>
                           <span
                             style={{
@@ -1174,7 +1176,9 @@ export default function UserMessages() {
                   >
                     {activeConversation.buddy?.fullName}
                   </span>
-                  <CheckCircle2 size={15} color="#0284C7" />
+                  {Boolean(activeConversation.buddy?.isVerifiedStudent || activeConversation.buddy?.isPremium) && (
+                    <CheckCircle2 size={15} color="#0284C7" />
+                  )}
                 </div>
                 <div
                   style={{
