@@ -507,7 +507,7 @@ export default function UserMessages() {
     }
   };
 
-  // 6. Xử lý khi bấm thích lại người đã thích mình -> Ghép đôi thành công!
+  // 6. Xử lý khi bấm thích lại người đã thích mình -> Kết bạn thành công!
   const handleAcceptLike = async (item) => {
     const buddyId = item.buddy?.id || item.buddy?._id;
     if (!buddyId) return;
@@ -518,7 +518,7 @@ export default function UserMessages() {
       const isMatch = res?.isMatch ?? true;
 
       alert(
-        `🎉 Ghép đôi thành công!\nBạn và ${item.buddy?.fullName} đã thích nhau. Hãy bắt đầu trò chuyện ngay nhé! ☕`
+        `🎉 Kết bạn thành công!\nBạn và ${item.buddy?.fullName} đã thích nhau. Hãy bắt đầu trò chuyện ngay nhé! ☕`
       );
 
       // Tải lại dữ liệu và chuyển ngay sang tab Hội thoại
@@ -527,7 +527,7 @@ export default function UserMessages() {
       setSelectedMatchId(item.matchId);
     } catch (err) {
       console.error('Lỗi khi chấp nhận thích:', err);
-      alert('Không thể hoàn tất ghép đôi. Vui lòng thử lại.');
+      alert('Không thể hoàn tất kết bạn. Vui lòng thử lại.');
     } finally {
       setActionLoadingId(null);
     }
@@ -1209,7 +1209,7 @@ export default function UserMessages() {
             </div>
           )}
 
-          {/* TAB 1: DANH SÁCH HỘI THOẠI ĐÃ GHÉP ĐÔI */}
+          {/* TAB 1: DANH SÁCH HỘI THOẠI ĐÃ KẾT BẠN */}
           {activeTab === 'conversations' && (
             <div>
               {loading && conversations.length === 0 ? (
@@ -1406,7 +1406,7 @@ export default function UserMessages() {
                         >
                           {lastMsg
                             ? (lastMsg.isFromMe ? 'Bạn: ' : '') + lastMsg.text
-                            : '🎉 Ghép đôi thành công! Bắt đầu trò chuyện'}
+                            : '🎉 Kết bạn thành công! Bắt đầu trò chuyện'}
                         </div>
                       </div>
 
@@ -1573,7 +1573,7 @@ export default function UserMessages() {
                       <span>
                         {actionLoadingId === item.matchId
                           ? 'Đang kết nối...'
-                          : 'Thích lại & Ghép đôi 🎉'}
+                          : 'Thích lại & Kết bạn 🎉'}
                       </span>
                     </button>
                   </div>
@@ -1594,7 +1594,7 @@ export default function UserMessages() {
                 }}
               >
                 Lời thích bạn đã gửi. Khi họ thích lại, bạn sẽ nhận được thông
-                báo ghép đôi!
+                báo kết bạn!
               </div>
 
               {filteredSentLikes.length === 0 ? (
@@ -1877,7 +1877,7 @@ export default function UserMessages() {
           >
             <Sparkles size={16} color="#EA580C" />
             <span>
-              🎉 Hai bạn đã được ghép đôi thành công! Hãy gửi lời chào và hẹn
+              🎉 Hai bạn đã được kết bạn thành công! Hãy gửi lời chào và hẹn
               cafe học bài cùng nhau nhé!
             </span>
           </div>
@@ -2561,7 +2561,7 @@ export default function UserMessages() {
                         )}
                         {/* File */}
                         {msg.fileUrl && msg.type === 'file' && (
-                          <a href={msg.fileUrl} target="_blank" rel="noopener noreferrer" download={repairMojibake(msg.fileName || 'tai-lieu')} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', borderRadius: '10px', backgroundColor: isMe ? 'rgba(255,255,255,0.2)' : '#F8FAFC', color: isMe ? '#FFF' : '#0F172A', textDecoration: 'none', border: isMe ? '1px solid rgba(255,255,255,0.3)' : '1px solid #E2E8F0', marginBottom: msg.text ? '8px' : '0' }}>
+                          <a href={getDownloadUrl(msg.fileUrl, msg.fileName)} target="_blank" rel="noopener noreferrer" download={repairMojibake(msg.fileName || 'tai-lieu')} onClick={(e) => handleDownloadFile(e, msg.fileUrl, msg.fileName)} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', borderRadius: '10px', backgroundColor: isMe ? 'rgba(255,255,255,0.2)' : '#F8FAFC', color: isMe ? '#FFF' : '#0F172A', textDecoration: 'none', border: isMe ? '1px solid rgba(255,255,255,0.3)' : '1px solid #E2E8F0', marginBottom: msg.text ? '8px' : '0' }}>
                             <FileText size={18} />
                             <div>
                               <div style={{ fontSize: '12px', fontWeight: '700', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{repairMojibake(msg.fileName || 'Tài liệu')}</div>
@@ -2821,7 +2821,7 @@ export default function UserMessages() {
                 </label>
                 {createGroupFriends.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)', backgroundColor: '#F8FAFC', borderRadius: '12px' }}>
-                    <p style={{ fontSize: '13px' }}>Chưa có bạn bè để mời. Hãy ghép đôi với ai đó trước!</p>
+                    <p style={{ fontSize: '13px' }}>Chưa có bạn bè để mời. Hãy kết bạn với ai đó trước!</p>
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '280px', overflowY: 'auto' }}>
