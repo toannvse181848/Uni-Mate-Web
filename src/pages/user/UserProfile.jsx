@@ -1018,9 +1018,10 @@ export default function UserProfile() {
             backdropFilter: 'blur(6px)',
             zIndex: 9999,
             display: 'flex',
-            alignItems: 'center',
+            alignItems: 'flex-start',
             justifyContent: 'center',
             padding: '16px',
+            overflowY: 'auto',
             animation: 'fadeIn 0.2s ease-out',
           }}
           onClick={(e) => {
@@ -1036,10 +1037,12 @@ export default function UserProfile() {
               borderRadius: '24px',
               maxWidth: '520px',
               width: '100%',
-              overflow: 'hidden',
+              maxHeight: '90vh',
+              overflowY: 'auto',
               boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
               position: 'relative',
               animation: 'slideUp 0.25s ease-out',
+              margin: 'auto',
             }}
           >
             {/* Header Gradient */}
