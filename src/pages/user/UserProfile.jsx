@@ -5,6 +5,8 @@ import { userApi, authApi, orderApi } from '../../services/api';
 import { trackEvent, getAnalyticsClientId } from '../../utils/analytics';
 import usePremiumPlans, { PREMIUM_PLAN_LABEL, formatVnd } from '../../hooks/usePremiumPlans';
 import { getAvatarUrl } from '../../constants/avatar';
+import PaymentSuccess from '../../components/PaymentSuccess';
+import OrderHistory from '../../components/OrderHistory';
 import {
   GraduationCap,
   ShieldCheck,
@@ -95,6 +97,7 @@ export default function UserProfile() {
 
   // === Order & VietQR State ===
   const [currentOrder, setCurrentOrder] = useState(null); // { order, payment }
+  const [paidOrder, setPaidOrder] = useState(null); // đơn vừa thanh toán xong → màn hình thành công
   const [copiedField, setCopiedField] = useState(null);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
   const [orderPolling, setOrderPolling] = useState(false);
@@ -110,6 +113,38 @@ export default function UserProfile() {
   const [pwdLoading, setPwdLoading] = useState(false);
   const [pwdNotice, setPwdNotice] = useState(null); // { type: 'success'|'error', text }
 
+  // Mở lại modal (vd: sau khi tắt tab) thì hiện tiếp đơn đang chờ thanh toán, không bắt tạo lại
+  useEffect(() => {
+    if (!showPremiumModal || currentOrder || paidOrder) return undefined;
+    let active = true;
+    orderApi
+      .getMyOrders()
+      .then(async (res) => {
+        const pending = res?.data?.find((o) => o.status === 'pending');
+        if (!pending || !active) return;
+        const detail = await orderApi.getOrder(pending.code);
+        if (active && detail?.data?.payment) setCurrentOrder(detail.data);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [showPremiumModal, currentOrder, paidOrder]);
+
+  // Đơn đã thanh toán: chuyển sang màn hình thành công (không tự đóng để khách kịp xem)
+  const showPaymentSuccess = async (order) => {
+    setPaidOrder(order);
+    setCurrentOrder(null);
+    setPremiumNotice(null);
+    await reloadUser?.();
+  };
+
+  const closePremiumModal = () => {
+    setShowPremiumModal(false);
+    setPremiumNotice(null);
+    setPaidOrder(null);
+  };
+
   // Tự động kiểm tra trạng thái đơn hàng khi đang mở màn hình thanh toán VietQR
   useEffect(() => {
     let timer = null;
@@ -119,16 +154,7 @@ export default function UserProfile() {
           const res = await orderApi.getOrder(currentOrder.order.code);
           if (res?.data?.order?.status === 'paid') {
             clearInterval(timer);
-            setPremiumNotice({
-              type: 'success',
-              text: 'Đã nhận được thanh toán! Gói Premium đã được kích hoạt thành công 🎉',
-            });
-            await reloadUser?.();
-            setTimeout(() => {
-              setShowPremiumModal(false);
-              setCurrentOrder(null);
-              setPremiumNotice(null);
-            }, 2500);
+            await showPaymentSuccess(res.data.order);
           } else if (res?.data?.order?.status === 'cancelled') {
             clearInterval(timer);
             setPremiumNotice({ type: 'error', text: 'Đơn hàng đã bị huỷ.' });
@@ -184,16 +210,7 @@ export default function UserProfile() {
       setOrderPolling(true);
       const res = await orderApi.getOrder(currentOrder.order.code);
       if (res?.data?.order?.status === 'paid') {
-        setPremiumNotice({
-          type: 'success',
-          text: 'Đã nhận được thanh toán! Gói Premium đã được kích hoạt thành công 🎉',
-        });
-        await reloadUser?.();
-        setTimeout(() => {
-          setShowPremiumModal(false);
-          setCurrentOrder(null);
-          setPremiumNotice(null);
-        }, 2000);
+        await showPaymentSuccess(res.data.order);
       } else {
         setPremiumNotice({
           type: 'error',
@@ -1006,6 +1023,11 @@ export default function UserProfile() {
         )}
       </div>
 
+      {/* ===== LỊCH SỬ GIAO DỊCH: tải lại mỗi khi đóng / mở khung thanh toán ===== */}
+      <div style={{ marginTop: '24px' }}>
+        <OrderHistory onResume={() => setShowPremiumModal(true)} refreshKey={showPremiumModal} />
+      </div>
+
       {/* ============================================================== */}
       {/* MODAL NÂNG CẤP PREMIUM NHẬN TÍCH XANH                          */}
       {/* ============================================================== */}
@@ -1025,10 +1047,7 @@ export default function UserProfile() {
             animation: 'fadeIn 0.2s ease-out',
           }}
           onClick={(e) => {
-            if (e.target === e.currentTarget && !upgrading) {
-              setShowPremiumModal(false);
-              setPremiumNotice(null);
-            }
+            if (e.target === e.currentTarget && !upgrading) closePremiumModal();
           }}
         >
           <div
@@ -1057,10 +1076,7 @@ export default function UserProfile() {
               <button
                 type="button"
                 onClick={() => {
-                  if (!upgrading) {
-                    setShowPremiumModal(false);
-                    setPremiumNotice(null);
-                  }
+                  if (!upgrading) closePremiumModal();
                 }}
                 style={{
                   position: 'absolute',
@@ -1143,8 +1159,9 @@ export default function UserProfile() {
                 </div>
               )}
 
-              {/* Khi đang có đơn hàng chờ thanh toán VietQR */}
-              {currentOrder ? (
+              {paidOrder ? (
+                <PaymentSuccess order={paidOrder} expiresAt={user?.premiumExpiresAt} onDone={closePremiumModal} />
+              ) : /* Khi đang có đơn hàng chờ thanh toán VietQR */ currentOrder ? (
                 <div>
                   <div
                     style={{
