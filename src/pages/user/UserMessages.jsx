@@ -31,11 +31,18 @@ import {
   UserPlus,
   LogOut,
   Crown,
+  ChevronDown,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { chatApi, matchApi, groupChatApi } from '../../services/api';
+import { chatApi, matchApi, groupChatApi, venueApi, API_BASE_URL } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { getAvatarUrl } from '../../constants/avatar';
+import { UNREAD_CHANGED_EVENT } from '../../constants/events';
+import { trackEvent } from '../../utils/analytics';
+import useChatScroll, { mergeLatestMessages, prependOlderMessages } from '../../hooks/useChatScroll';
+
+// Số tin cũ tải thêm mỗi lần kéo lên đầu khung chat
+const OLDER_MESSAGES_PAGE_SIZE = 30;
 
 // Helper format thời gian tin nhắn
 const formatTime = (dateStr) => {
@@ -74,6 +81,109 @@ const repairMojibake = (str) => {
   return str;
 };
 
+// Link tải file qua backend để giữ đúng tên gốc (thuộc tính download bị bỏ qua với link khác domain)
+const getDownloadUrl = (fileUrl, fileName) => {
+  if (!fileUrl || fileUrl.startsWith('blob:')) return fileUrl;
+  const name = repairMojibake(fileName || 'tai-lieu');
+  return `${API_BASE_URL}/api/chat/download?url=${encodeURIComponent(fileUrl)}&name=${encodeURIComponent(name)}`;
+};
+
+// Giới hạn theo Cloudinary gói free: ảnh/tài liệu 10MB; video giới hạn bởi backend (50MB)
+const MAX_VIDEO_SIZE_MB = 50;
+const MAX_OTHER_SIZE_MB = 10;
+
+// Tạo object đính kèm { file, previewUrl, type, name, size } từ File; trả về null nếu file không hợp lệ
+const buildAttachment = (file, forcedType = null) => {
+  if (!file) return null;
+  const mime = file.type || '';
+  let mediaType = forcedType || 'file';
+  if (!forcedType) {
+    if (mime.startsWith('image/')) mediaType = 'image';
+    else if (mime.startsWith('video/')) mediaType = 'video';
+  }
+  const maxSizeMb = mime.startsWith('video/') ? MAX_VIDEO_SIZE_MB : MAX_OTHER_SIZE_MB;
+  if (file.size > maxSizeMb * 1024 * 1024) {
+    alert(`File vượt quá giới hạn ${maxSizeMb}MB cho phép`);
+    return null;
+  }
+  const previewUrl = mediaType === 'image' || mediaType === 'video' ? URL.createObjectURL(file) : null;
+  return { file, previewUrl, type: mediaType, name: file.name, size: file.size };
+};
+
+// Lấy file (ảnh chụp màn hình, ảnh copy...) từ sự kiện paste Ctrl+V
+const getPastedFile = (e) => {
+  const items = e.clipboardData?.items || [];
+  for (const item of items) {
+    if (item.kind === 'file') {
+      const file = item.getAsFile();
+      if (file) return file;
+    }
+  }
+  return null;
+};
+
+// Đóng popover khi bấm ra ngoài; bỏ qua các phần tử trong `refs` (popover và nút mở nó,
+// để bấm lại nút vẫn tắt được thay vì bị đóng rồi mở lại ngay)
+const useCloseOnClickOutside = (isOpen, setOpen, refs) => {
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleMouseDown = (e) => {
+      if (refs.every((ref) => !ref.current?.contains(e.target))) setOpen(false);
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
+    // refs là useRef nên không đổi giữa các lần render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, setOpen]);
+};
+
+// Đầu khung chat: đang tải tin cũ / nút xem tin cũ hơn (kéo lên đầu cũng tự tải)
+function OlderMessagesBar({ hasMore, loading, onLoad, color }) {
+  if (!hasMore && !loading) return null;
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center', padding: '2px 0' }}>
+      {loading ? (
+        <Loader2 size={18} className="spinner" color={color} />
+      ) : (
+        <button
+          type="button"
+          onClick={onLoad}
+          style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: '999px', padding: '5px 14px', fontSize: '12px', fontWeight: '700', color, cursor: 'pointer' }}
+        >
+          Xem tin nhắn cũ hơn
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Nút nổi ở đáy khung chat khi đang kéo lên xem tin cũ
+function JumpToLatestButton({ chatScroll, color }) {
+  if (!chatScroll.showJumpButton) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => chatScroll.scrollToBottom()}
+      style={{ position: 'sticky', bottom: '0', alignSelf: 'center', zIndex: 5, flexShrink: 0, display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '999px', border: 'none', backgroundColor: color, color: '#FFFFFF', fontSize: '12.5px', fontWeight: '800', boxShadow: '0 6px 16px rgba(15,23,42,0.25)', cursor: 'pointer' }}
+    >
+      <ChevronDown size={16} />
+      {chatScroll.unseenCount > 0 ? `${chatScroll.unseenCount} tin nhắn mới` : 'Về tin nhắn mới nhất'}
+    </button>
+  );
+}
+
+// Badge đỏ báo tin nhắn chưa đọc trên tab Hội thoại / Nhóm
+const UNREAD_TAB_BADGE_STYLE = {
+  backgroundColor: '#EF4444',
+  color: '#FFFFFF',
+  fontSize: '10px',
+  fontWeight: '800',
+  minWidth: '18px',
+  padding: '1px 6px',
+  borderRadius: '10px',
+  boxShadow: '0 0 0 2px #FFFFFF',
+};
+
 // Danh mục biểu tượng & icon phổ biến cho sinh viên
 const EMOJI_CATEGORIES = [
   {
@@ -82,7 +192,7 @@ const EMOJI_CATEGORIES = [
   },
   {
     name: 'Học tập & Cafe',
-    emojis: ['☕', '🧋', '🍵', '🍰', '🥐', '🍕', '🥤', '📚', '📖', '📝', '💻', '🎓', '🎒', '💡', '🎯', '🚀'],
+    emojis: ['☕', '🍩', '🍵', '🍰', '🥐', '🍕', '🥤', '📚', '📖', '📝', '💻', '🎓', '🎒', '💡', '🎯', '🚀'],
   },
   {
     name: 'Thả tim & Cử chỉ',
@@ -163,7 +273,6 @@ const getPresenceInfo = (buddy) => {
 
 export default function UserMessages() {
   const { user } = useAuth();
-  const messagesEndRef = useRef(null);
 
   // Tabs: 'conversations' | 'received' | 'sent' | 'groups'
   const [activeTab, setActiveTab] = useState('conversations');
@@ -175,8 +284,13 @@ export default function UserMessages() {
 
   // Active chat (1-1)
   const [selectedMatchId, setSelectedMatchId] = useState(null);
+  const selectedMatchIdRef = useRef(null);
   const [messages, setMessages] = useState([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const loadingOlderMessagesRef = useRef(false);
+  const lastPolledMessageIdRef = useRef(null);
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -192,11 +306,17 @@ export default function UserMessages() {
   const videoInputRef = useRef(null);
   const fileInputRef = useRef(null);
   const emojiPickerRef = useRef(null);
+  const emojiButtonRef = useRef(null);
 
   // ─── GROUP CHAT STATES ───────────────────────────────────────────────────
   const [groups, setGroups] = useState([]);
   const [selectedGroupId, setSelectedGroupId] = useState(null);
+  const selectedGroupIdRef = useRef(null);
   const [groupMessages, setGroupMessages] = useState([]);
+  const [hasOlderGroupMessages, setHasOlderGroupMessages] = useState(false);
+  const [loadingOlderGroupMessages, setLoadingOlderGroupMessages] = useState(false);
+  const loadingOlderGroupMessagesRef = useRef(false);
+  const lastPolledGroupMessageIdRef = useRef(null);
   const [groupInfo, setGroupInfo] = useState(null);
   const [loadingGroupMessages, setLoadingGroupMessages] = useState(false);
   const [groupInputText, setGroupInputText] = useState('');
@@ -204,10 +324,10 @@ export default function UserMessages() {
   const [groupAttachment, setGroupAttachment] = useState(null);
   const [groupEmojiPicker, setGroupEmojiPicker] = useState(false);
   const groupEmojiPickerRef = useRef(null);
+  const groupEmojiButtonRef = useRef(null);
   const groupImageInputRef = useRef(null);
   const groupVideoInputRef = useRef(null);
   const groupFileInputRef = useRef(null);
-  const groupMessagesEndRef = useRef(null);
 
   // Modal tạo nhóm
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
@@ -225,20 +345,16 @@ export default function UserMessages() {
   // Modal danh sách thành viên nhóm
   const [showGroupMembersModal, setShowGroupMembersModal] = useState(false);
 
-  // Đóng emoji picker khi click ra ngoài
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target)) {
-        setShowEmojiPicker(false);
-      }
-    };
-    if (showEmojiPicker) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [showEmojiPicker]);
+  // Modal chọn quán để gợi ý cho bạn đang chat
+  const [showVenuePicker, setShowVenuePicker] = useState(false);
+  const [venueOptions, setVenueOptions] = useState([]);
+  const [loadingVenues, setLoadingVenues] = useState(false);
+  const [venueSearch, setVenueSearch] = useState('');
+  const [sendingVenueId, setSendingVenueId] = useState(null);
+
+  // Đóng emoji picker (1-1 và nhóm) khi click ra ngoài
+  useCloseOnClickOutside(showEmojiPicker, setShowEmojiPicker, [emojiPickerRef, emojiButtonRef]);
+  useCloseOnClickOutside(groupEmojiPicker, setGroupEmojiPicker, [groupEmojiPickerRef, groupEmojiButtonRef]);
 
   const handleSelectEmoji = (emoji) => {
     setInputText((prev) => prev + emoji);
@@ -248,27 +364,17 @@ export default function UserMessages() {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
+    const attachment = buildAttachment(file, forcedType);
+    if (attachment) setSelectedAttachment(attachment);
+  };
 
-    const mime = file.type || '';
-    let mediaType = forcedType || 'file';
-    if (!forcedType) {
-      if (mime.startsWith('image/')) mediaType = 'image';
-      else if (mime.startsWith('video/')) mediaType = 'video';
-    }
-
-    if (file.size > 50 * 1024 * 1024) {
-      alert('File vượt quá giới hạn 50MB cho phép');
-      return;
-    }
-
-    const previewUrl = mediaType === 'image' || mediaType === 'video' ? URL.createObjectURL(file) : null;
-    setSelectedAttachment({
-      file,
-      previewUrl,
-      type: mediaType,
-      name: file.name,
-      size: file.size,
-    });
+  // Ctrl+V dán ảnh/file trực tiếp vào ô chat; dán chữ thường vẫn giữ hành vi mặc định
+  const handlePasteAttachment = (e, setAttachment) => {
+    const file = getPastedFile(e);
+    if (!file) return;
+    e.preventDefault();
+    const attachment = buildAttachment(file);
+    if (attachment) setAttachment(attachment);
   };
 
   const currentUserId = (user?.id || user?._id)?.toString();
@@ -327,25 +433,33 @@ export default function UserMessages() {
       try {
         if (!isPolling) setLoadingMessages(true);
         const res = await chatApi.getMessages(matchId);
+        // Đã chuyển sang hội thoại khác trong lúc chờ → bỏ kết quả cũ
+        if (matchId !== selectedMatchIdRef.current) return;
         const list = res.data || [];
-        setMessages(list);
-
-        // Cập nhật lại trạng thái buddy (lastActiveAt, isOnline) nếu backend trả về
-        if (res.buddy) {
-          setConversations((prev) =>
-            prev.map((c) =>
-              c.matchId === matchId
-                ? {
-                    ...c,
-                    buddy: {
-                      ...c.buddy,
-                      ...res.buddy,
-                    },
-                  }
-                : c
-            )
-          );
+        // Polling chỉ cập nhật phần tin mới nhất, giữ lại tin cũ đã kéo lên xem
+        setMessages((prev) => (isPolling ? mergeLatestMessages(prev, list) : list));
+        if (!isPolling) setHasOlderMessages(Boolean(res.hasMore));
+        // Polling vừa nhận (và server vừa đánh dấu đã đọc) tin mới → cập nhật badge/tiêu đề tab ngay
+        const newestId = list[list.length - 1]?._id;
+        if (isPolling && newestId && newestId !== lastPolledMessageIdRef.current) {
+          window.dispatchEvent(new Event(UNREAD_CHANGED_EVENT));
         }
+        lastPolledMessageIdRef.current = newestId;
+
+        // Server đã đánh dấu đã đọc khi tải tin → xoá số chưa đọc của hội thoại này,
+        // đồng thời cập nhật trạng thái buddy (lastActiveAt, isOnline) nếu backend trả về
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.matchId === matchId
+              ? {
+                  ...c,
+                  unreadCount: 0,
+                  buddy: res.buddy ? { ...c.buddy, ...res.buddy } : c.buddy,
+                }
+              : c
+          )
+        );
+        if (!isPolling) window.dispatchEvent(new Event(UNREAD_CHANGED_EVENT));
       } catch (err) {
         console.log('Lỗi tải tin nhắn matchId:', matchId, err.message);
       } finally {
@@ -356,24 +470,52 @@ export default function UserMessages() {
   );
 
   useEffect(() => {
+    selectedMatchIdRef.current = selectedMatchId;
     if (selectedMatchId) {
       loadMessages(selectedMatchId);
     }
   }, [selectedMatchId, loadMessages]);
 
-  // 3. Polling tin nhắn mới mỗi 3.5s khi đang mở chat
+  // 3. Polling tin nhắn mới mỗi 3.5s khi đang mở chat.
+  // Tab đang ẩn thì không tải: vừa đỡ tốn request, vừa không tự đánh dấu "đã đọc"
+  // khi người dùng chưa xem → tiêu đề tab vẫn báo được "(N) Tin nhắn mới".
   useEffect(() => {
     if (!selectedMatchId || selectedMatchId.startsWith('demo_')) return;
     const timer = setInterval(() => {
+      if (document.hidden) return;
       loadMessages(selectedMatchId, true);
     }, 3500);
     return () => clearInterval(timer);
   }, [selectedMatchId, loadMessages]);
 
-  // Tự động cuộn xuống cuối khi có tin nhắn mới
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  // Kéo lên đầu khung chat → tải thêm tin cũ hơn
+  const loadOlderMessages = async () => {
+    const matchId = selectedMatchId;
+    const oldest = messages.find((m) => !String(m._id).startsWith('temp_'));
+    if (!matchId || !hasOlderMessages || !oldest || loadingOlderMessagesRef.current) return;
+    loadingOlderMessagesRef.current = true;
+    setLoadingOlderMessages(true);
+    try {
+      const res = await chatApi.getMessages(matchId, { before: oldest.createdAt, limit: OLDER_MESSAGES_PAGE_SIZE });
+      if (matchId !== selectedMatchIdRef.current) return;
+      chatScroll.markPrepend();
+      setMessages((prev) => prependOlderMessages(prev, res.data || []));
+      setHasOlderMessages(Boolean(res.hasMore));
+    } catch (err) {
+      console.log('Lỗi tải tin nhắn cũ:', err.message);
+    } finally {
+      loadingOlderMessagesRef.current = false;
+      setLoadingOlderMessages(false);
+    }
+  };
+
+  // Chỉ tự cuộn khi có tin mới và đang ở cuối; kéo lên đầu thì tải tin cũ
+  const chatScroll = useChatScroll({
+    messages,
+    resetKey: selectedMatchId,
+    currentUserId,
+    onReachTop: () => loadOlderMessages(),
+  });
 
   // 4. Tìm kiếm cuộc trò chuyện
   const activeConversation =
@@ -407,6 +549,10 @@ export default function UserMessages() {
     );
   });
 
+  // Tổng tin chưa đọc để hiện badge đỏ trên tab
+  const totalConversationUnread = conversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0);
+  const totalGroupUnread = groups.reduce((sum, g) => sum + (g.unreadCount || 0), 0);
+
   // 5. Gửi tin nhắn (hỗ trợ văn bản + đa phương tiện ảnh/video/tài liệu)
   const handleSendMessage = async (e) => {
     e?.preventDefault();
@@ -429,7 +575,7 @@ export default function UserMessages() {
         }
       } catch (uploadErr) {
         console.error('Lỗi upload tệp đính kèm:', uploadErr);
-        alert('Không thể tải file lên. Vui lòng thử lại.');
+        alert(`Không thể tải file lên: ${uploadErr.message}`);
         setSending(false);
         setUploadingMedia(false);
         return;
@@ -494,6 +640,7 @@ export default function UserMessages() {
 
     try {
       const res = await chatApi.sendMessage(selectedMatchId, payload);
+      trackEvent('message_send', { message_type: payload.type });
       const savedMsg = res.data;
       if (savedMsg) {
         setMessages((prev) =>
@@ -516,6 +663,7 @@ export default function UserMessages() {
       setActionLoadingId(item.matchId);
       const res = await matchApi.swipe(buddyId, 'like');
       const isMatch = res?.isMatch ?? true;
+      if (isMatch) trackEvent('friend_match', { source: 'accept_like' });
 
       alert(
         `🎉 Kết bạn thành công!\nBạn và ${item.buddy?.fullName} đã thích nhau. Hãy bắt đầu trò chuyện ngay nhé! ☕`
@@ -540,6 +688,54 @@ export default function UserMessages() {
     setInputText(inviteText);
   };
 
+  // Mở modal chọn quán (tải danh sách quán lần đầu)
+  const openVenuePicker = async () => {
+    setVenueSearch('');
+    setShowVenuePicker(true);
+    if (venueOptions.length > 0) return;
+    setLoadingVenues(true);
+    try {
+      const res = await venueApi.getPublicVenues();
+      setVenueOptions(res.data || []);
+    } catch (err) {
+      console.log('Lỗi tải danh sách quán:', err.message);
+    } finally {
+      setLoadingVenues(false);
+    }
+  };
+
+  // Gửi thẻ gợi ý quán cho bạn đang chat
+  const handleSendVenue = async (venue) => {
+    if (!selectedMatchId || sendingVenueId) return;
+    setSendingVenueId(venue._id);
+    try {
+      const res = await chatApi.sendMessage(selectedMatchId, { type: 'venue', venueId: venue._id });
+      trackEvent('message_send', { message_type: 'venue' });
+      const savedMsg = res.data;
+      if (savedMsg) {
+        setMessages((prev) => [...prev, savedMsg]);
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.matchId === selectedMatchId
+              ? { ...c, lastMessage: { text: savedMsg.text, type: 'venue', isFromMe: true, createdAt: savedMsg.createdAt } }
+              : c
+          )
+        );
+      }
+      setShowVenuePicker(false);
+    } catch (err) {
+      alert(`Không thể gửi quán: ${err.message}`);
+    } finally {
+      setSendingVenueId(null);
+    }
+  };
+
+  const filteredVenueOptions = venueOptions.filter((v) => {
+    const q = venueSearch.trim().toLowerCase();
+    if (!q) return true;
+    return v.name?.toLowerCase().includes(q) || v.address?.toLowerCase().includes(q);
+  });
+
   // ─── GROUP CHAT HANDLERS ──────────────────────────────────────────────────
 
   // Tải danh sách nhóm
@@ -562,8 +758,23 @@ export default function UserMessages() {
     try {
       if (!isPolling) setLoadingGroupMessages(true);
       const res = await groupChatApi.getGroupMessages(groupId);
-      setGroupMessages(res.data || []);
+      // Đã chuyển sang nhóm khác trong lúc chờ → bỏ kết quả cũ
+      if (groupId !== selectedGroupIdRef.current) return;
+      const list = res.data || [];
+      // Polling chỉ cập nhật phần tin mới nhất, giữ lại tin cũ đã kéo lên xem
+      setGroupMessages((prev) => (isPolling ? mergeLatestMessages(prev, list) : list));
+      if (!isPolling) setHasOlderGroupMessages(Boolean(res.hasMore));
+      const newestId = list[list.length - 1]?._id;
+      if (isPolling && newestId && newestId !== lastPolledGroupMessageIdRef.current) {
+        window.dispatchEvent(new Event(UNREAD_CHANGED_EVENT));
+      }
+      lastPolledGroupMessageIdRef.current = newestId;
       if (res.group) setGroupInfo(res.group);
+      // Server đã đánh dấu đã đọc khi tải tin → xoá số chưa đọc của nhóm này
+      setGroups((prev) =>
+        prev.map((g) => (g.groupId === groupId && g.unreadCount ? { ...g, unreadCount: 0 } : g))
+      );
+      if (!isPolling) window.dispatchEvent(new Event(UNREAD_CHANGED_EVENT));
     } catch (err) {
       console.log('Lỗi tải tin nhắn nhóm:', err.message);
     } finally {
@@ -572,24 +783,74 @@ export default function UserMessages() {
   }, []);
 
   useEffect(() => {
+    selectedGroupIdRef.current = selectedGroupId;
     if (selectedGroupId) {
       loadGroupMessages(selectedGroupId);
     }
   }, [selectedGroupId, loadGroupMessages]);
 
-  // Polling tin nhắn nhóm mỗi 4s
+  // Polling tin nhắn nhóm mỗi 4s (bỏ qua khi tab đang ẩn, như chat 1-1)
   useEffect(() => {
     if (!selectedGroupId) return;
     const timer = setInterval(() => {
+      if (document.hidden) return;
       loadGroupMessages(selectedGroupId, true);
     }, 4000);
     return () => clearInterval(timer);
   }, [selectedGroupId, loadGroupMessages]);
 
-  // Scroll xuống cuối khi có tin nhắn nhóm mới
+  // Kéo lên đầu khung chat nhóm → tải thêm tin cũ hơn
+  const loadOlderGroupMessages = async () => {
+    const groupId = selectedGroupId;
+    const oldest = groupMessages.find((m) => !String(m._id).startsWith('temp_'));
+    if (!groupId || !hasOlderGroupMessages || !oldest || loadingOlderGroupMessagesRef.current) return;
+    loadingOlderGroupMessagesRef.current = true;
+    setLoadingOlderGroupMessages(true);
+    try {
+      const res = await groupChatApi.getGroupMessages(groupId, { before: oldest.createdAt, limit: OLDER_MESSAGES_PAGE_SIZE });
+      if (groupId !== selectedGroupIdRef.current) return;
+      groupChatScroll.markPrepend();
+      setGroupMessages((prev) => prependOlderMessages(prev, res.data || []));
+      setHasOlderGroupMessages(Boolean(res.hasMore));
+    } catch (err) {
+      console.log('Lỗi tải tin nhắn nhóm cũ:', err.message);
+    } finally {
+      loadingOlderGroupMessagesRef.current = false;
+      setLoadingOlderGroupMessages(false);
+    }
+  };
+
+  const groupChatScroll = useChatScroll({
+    messages: groupMessages,
+    resetKey: selectedGroupId,
+    currentUserId,
+    onReachTop: () => loadOlderGroupMessages(),
+  });
+
+  // Cập nhật danh sách hội thoại + nhóm mỗi 10s để hiện số tin chưa đọc mới.
+  // Hội thoại/nhóm đang mở được coi là đã đọc (polling tin nhắn sẽ đánh dấu trên server).
   useEffect(() => {
-    groupMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [groupMessages]);
+    const refreshUnread = async () => {
+      const [convRes, groupRes] = await Promise.allSettled([
+        chatApi.getConversations(),
+        groupChatApi.getMyGroups(),
+      ]);
+      if (convRes.status === 'fulfilled' && Array.isArray(convRes.value?.data)) {
+        setConversations(
+          convRes.value.data.map((c) => (c.matchId === selectedMatchId ? { ...c, unreadCount: 0 } : c))
+        );
+      }
+      if (groupRes.status === 'fulfilled' && Array.isArray(groupRes.value?.data)) {
+        setGroups(
+          groupRes.value.data.map((g) => (g.groupId === selectedGroupId ? { ...g, unreadCount: 0 } : g))
+        );
+      }
+    };
+    const timer = setInterval(() => {
+      if (!document.hidden) refreshUnread();
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [selectedMatchId, selectedGroupId]);
 
   // Gửi tin nhắn nhóm
   const handleSendGroupMessage = async (e) => {
@@ -609,7 +870,7 @@ export default function UserMessages() {
         const uploadRes = await groupChatApi.uploadMedia(attachment.file);
         if (uploadRes?.data) uploadedFile = uploadRes.data;
       } catch (err) {
-        alert('Không thể tải file lên. Vui lòng thử lại.');
+        alert(`Không thể tải file lên: ${err.message}`);
         setSendingGroup(false);
         return;
       }
@@ -664,15 +925,8 @@ export default function UserMessages() {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
-    if (file.size > 50 * 1024 * 1024) { alert('File vượt quá 50MB'); return; }
-    const mime = file.type || '';
-    let mediaType = forcedType || 'file';
-    if (!forcedType) {
-      if (mime.startsWith('image/')) mediaType = 'image';
-      else if (mime.startsWith('video/')) mediaType = 'video';
-    }
-    const previewUrl = (mediaType === 'image' || mediaType === 'video') ? URL.createObjectURL(file) : null;
-    setGroupAttachment({ file, previewUrl, type: mediaType, name: file.name, size: file.size });
+    const attachment = buildAttachment(file, forcedType);
+    if (attachment) setGroupAttachment(attachment);
   };
 
   // Lấy danh sách bạn bè dự phòng từ chính conversations đã load thành công
@@ -960,20 +1214,9 @@ export default function UserMessages() {
             }}
           >
             <span>Hội thoại</span>
-            {conversations.length > 0 && (
-              <span
-                style={{
-                  backgroundColor:
-                    activeTab === 'conversations' ? '#FF5722' : '#E2E8F0',
-                  color:
-                    activeTab === 'conversations' ? '#FFFFFF' : '#475569',
-                  fontSize: '10px',
-                  fontWeight: '800',
-                  padding: '1px 6px',
-                  borderRadius: '10px',
-                }}
-              >
-                {conversations.length}
+            {totalConversationUnread > 0 && (
+              <span style={UNREAD_TAB_BADGE_STYLE} title={`${totalConversationUnread} tin nhắn chưa đọc`}>
+                {totalConversationUnread > 99 ? '99+' : totalConversationUnread}
               </span>
             )}
           </button>
@@ -1085,18 +1328,9 @@ export default function UserMessages() {
           >
             <Users size={13} />
             <span>Nhóm</span>
-            {groups.length > 0 && (
-              <span
-                style={{
-                  backgroundColor: activeTab === 'groups' ? '#7C3AED' : '#E2E8F0',
-                  color: activeTab === 'groups' ? '#FFFFFF' : '#475569',
-                  fontSize: '10px',
-                  fontWeight: '800',
-                  padding: '1px 5px',
-                  borderRadius: '10px',
-                }}
-              >
-                {groups.length}
+            {totalGroupUnread > 0 && (
+              <span style={UNREAD_TAB_BADGE_STYLE} title={`${totalGroupUnread} tin nhắn nhóm chưa đọc`}>
+                {totalGroupUnread > 99 ? '99+' : totalGroupUnread}
               </span>
             )}
           </button>
@@ -1838,8 +2072,10 @@ export default function UserMessages() {
                 <span>Rủ đi Cafe ☕</span>
               </button>
 
-              <Link
-                to="/user/venues"
+              <button
+                type="button"
+                onClick={openVenuePicker}
+                title="Gửi gợi ý quán cho bạn đang chat"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -1851,12 +2087,12 @@ export default function UserMessages() {
                   border: '1px solid #CBD5E1',
                   fontSize: '12px',
                   fontWeight: '700',
-                  textDecoration: 'none',
+                  cursor: 'pointer',
                 }}
               >
                 <MapPin size={14} />
                 <span>Chọn quán</span>
-              </Link>
+              </button>
             </div>
           </div>
 
@@ -1884,6 +2120,8 @@ export default function UserMessages() {
 
           {/* Message Stream */}
           <div
+            ref={chatScroll.containerRef}
+            onScroll={chatScroll.handleScroll}
             style={{
               flex: 1,
               overflowY: 'auto',
@@ -1894,6 +2132,12 @@ export default function UserMessages() {
               backgroundColor: '#F8FAFC',
             }}
           >
+            <OlderMessagesBar
+              hasMore={hasOlderMessages}
+              loading={loadingOlderMessages}
+              onLoad={loadOlderMessages}
+              color="#FF5722"
+            />
             {loadingMessages && messages.length === 0 ? (
               <div
                 style={{
@@ -2030,7 +2274,7 @@ export default function UserMessages() {
                       {/* Media: File / Document */}
                       {Boolean(msg.fileUrl && (msg.type === 'file' || (!msg.type && !msg.fileUrl.match(/\.(jpeg|jpg|png|gif|webp|mp4|webm|mov)(\?.*)?$/i)))) && (
                         <a
-                          href={msg.fileUrl}
+                          href={getDownloadUrl(msg.fileUrl, msg.fileName)}
                           target="_blank"
                           rel="noopener noreferrer"
                           download={repairMojibake(msg.fileName || 'tai-lieu')}
@@ -2082,8 +2326,28 @@ export default function UserMessages() {
                         </a>
                       )}
 
-                      {/* Text caption / body */}
-                      {msg.text && <div>{msg.text}</div>}
+                      {/* Thẻ gợi ý quán */}
+                      {msg.type === 'venue' && msg.venue && (
+                        <div style={{ width: '240px', maxWidth: '100%', backgroundColor: '#FFFFFF', color: '#0F172A', borderRadius: '12px', overflow: 'hidden', border: '1px solid #E2E8F0' }}>
+                          {msg.venue.image && (
+                            <img src={msg.venue.image} alt={msg.venue.name} style={{ width: '100%', height: '120px', objectFit: 'cover', display: 'block' }} />
+                          )}
+                          <div style={{ padding: '10px 12px' }}>
+                            <div style={{ fontSize: '11px', fontWeight: '700', color: '#FF5722', marginBottom: '2px' }}>📍 Gợi ý quán</div>
+                            <div style={{ fontSize: '14px', fontWeight: '800' }}>{msg.venue.name}</div>
+                            <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>{msg.venue.address}</div>
+                            <Link
+                              to={`/user/venues?venue=${msg.venue.venueId}`}
+                              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', marginTop: '10px', padding: '7px 10px', borderRadius: '8px', backgroundColor: '#FFF3E0', color: '#FF5722', fontSize: '12px', fontWeight: '800', textDecoration: 'none' }}
+                            >
+                              Xem quán <ChevronRight size={14} />
+                            </Link>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Text caption / body (thẻ quán đã hiển thị đủ thông tin nên ẩn chữ dự phòng) */}
+                      {msg.text && !(msg.type === 'venue' && msg.venue) && <div>{msg.text}</div>}
 
                       <div
                         style={{
@@ -2107,7 +2371,7 @@ export default function UserMessages() {
                 );
               })
             )}
-            <div ref={messagesEndRef} />
+            <JumpToLatestButton chatScroll={chatScroll} color="#FF5722" />
           </div>
 
           {/* Form Nhập Tin Nhắn & Đa Phương Tiện */}
@@ -2198,8 +2462,9 @@ export default function UserMessages() {
                   borderRadius: '16px',
                   boxShadow: '0 10px 30px rgba(0,0,0,0.18)',
                   border: '1px solid var(--border-color)',
-                  width: '320px',
-                  maxHeight: '260px',
+                  width: '400px',
+                  maxWidth: 'calc(100% - 32px)',
+                  maxHeight: '360px',
                   overflowY: 'auto',
                   padding: '12px',
                   zIndex: 100,
@@ -2355,6 +2620,7 @@ export default function UserMessages() {
                 </button>
 
                 <button
+                  ref={emojiButtonRef}
                   type="button"
                   onClick={() => setShowEmojiPicker((prev) => !prev)}
                   title="Chọn biểu tượng / icon"
@@ -2382,6 +2648,7 @@ export default function UserMessages() {
                 type="text"
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
+                onPaste={(e) => handlePasteAttachment(e, setSelectedAttachment)}
                 placeholder={selectedAttachment ? "Thêm chú thích cho file..." : "Nhập tin nhắn trò chuyện với bạn học..."}
                 style={{
                   flex: 1,
@@ -2494,7 +2761,17 @@ export default function UserMessages() {
           </div>
 
           {/* Group Messages */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div
+            ref={groupChatScroll.containerRef}
+            onScroll={groupChatScroll.handleScroll}
+            style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '8px' }}
+          >
+            <OlderMessagesBar
+              hasMore={hasOlderGroupMessages}
+              loading={loadingOlderGroupMessages}
+              onLoad={loadOlderGroupMessages}
+              color="#7C3AED"
+            />
             {loadingGroupMessages ? (
               <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
                 <RefreshCw size={24} style={{ animation: 'spin 1s linear infinite', color: '#7C3AED' }} />
@@ -2561,7 +2838,7 @@ export default function UserMessages() {
                         )}
                         {/* File */}
                         {msg.fileUrl && msg.type === 'file' && (
-                          <a href={getDownloadUrl(msg.fileUrl, msg.fileName)} target="_blank" rel="noopener noreferrer" download={repairMojibake(msg.fileName || 'tai-lieu')} onClick={(e) => handleDownloadFile(e, msg.fileUrl, msg.fileName)} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', borderRadius: '10px', backgroundColor: isMe ? 'rgba(255,255,255,0.2)' : '#F8FAFC', color: isMe ? '#FFF' : '#0F172A', textDecoration: 'none', border: isMe ? '1px solid rgba(255,255,255,0.3)' : '1px solid #E2E8F0', marginBottom: msg.text ? '8px' : '0' }}>
+                          <a href={getDownloadUrl(msg.fileUrl, msg.fileName)} target="_blank" rel="noopener noreferrer" download={repairMojibake(msg.fileName || 'tai-lieu')} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', borderRadius: '10px', backgroundColor: isMe ? 'rgba(255,255,255,0.2)' : '#F8FAFC', color: isMe ? '#FFF' : '#0F172A', textDecoration: 'none', border: isMe ? '1px solid rgba(255,255,255,0.3)' : '1px solid #E2E8F0', marginBottom: msg.text ? '8px' : '0' }}>
                             <FileText size={18} />
                             <div>
                               <div style={{ fontSize: '12px', fontWeight: '700', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{repairMojibake(msg.fileName || 'Tài liệu')}</div>
@@ -2581,7 +2858,7 @@ export default function UserMessages() {
                 );
               })
             )}
-            <div ref={groupMessagesEndRef} />
+            <JumpToLatestButton chatScroll={groupChatScroll} color="#7C3AED" />
           </div>
 
           {/* Group attachment preview */}
@@ -2608,7 +2885,7 @@ export default function UserMessages() {
 
           {/* Group Emoji Picker */}
           {groupEmojiPicker && (
-            <div ref={groupEmojiPickerRef} style={{ position: 'absolute', bottom: '72px', left: '16px', backgroundColor: '#FFFFFF', borderRadius: '16px', boxShadow: '0 10px 30px rgba(0,0,0,0.18)', border: '1px solid var(--border-color)', width: '300px', maxHeight: '250px', overflowY: 'auto', padding: '12px', zIndex: 100 }}>
+            <div ref={groupEmojiPickerRef} style={{ position: 'absolute', bottom: '72px', left: '16px', backgroundColor: '#FFFFFF', borderRadius: '16px', boxShadow: '0 10px 30px rgba(0,0,0,0.18)', border: '1px solid var(--border-color)', width: '400px', maxWidth: 'calc(100% - 32px)', maxHeight: '360px', overflowY: 'auto', padding: '12px', zIndex: 100 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                 <span style={{ fontSize: '12px', fontWeight: '800' }}>Biểu tượng</span>
                 <button onClick={() => setGroupEmojiPicker(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={14} /></button>
@@ -2618,7 +2895,7 @@ export default function UserMessages() {
                   <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>{cat.name}</div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: '3px' }}>
                     {cat.emojis.map((emoji) => (
-                      <button key={emoji} onClick={() => setGroupInputText((p) => p + emoji)} style={{ fontSize: '18px', background: 'none', border: 'none', cursor: 'pointer', padding: '3px', borderRadius: '6px' }} onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#F1F5F9')} onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}>{emoji}</button>
+                      <button key={emoji} type="button" onClick={() => setGroupInputText((p) => p + emoji)} style={{ fontSize: '20px', background: 'none', border: 'none', cursor: 'pointer', padding: '4px', borderRadius: '8px' }} onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#F1F5F9')} onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}>{emoji}</button>
                     ))}
                   </div>
                 </div>
@@ -2643,7 +2920,7 @@ export default function UserMessages() {
               <button type="button" onClick={() => groupFileInputRef.current?.click()} title="Gửi tài liệu" style={{ width: '36px', height: '36px', borderRadius: '10px', border: '1px solid var(--border-color)', background: '#FFFFFF', color: '#64748B', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
                 <Paperclip size={16} />
               </button>
-              <button type="button" onClick={() => setGroupEmojiPicker((p) => !p)} title="Emoji" style={{ width: '36px', height: '36px', borderRadius: '10px', border: '1px solid var(--border-color)', background: groupEmojiPicker ? '#F5F0FF' : '#FFFFFF', color: groupEmojiPicker ? '#7C3AED' : '#64748B', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+              <button ref={groupEmojiButtonRef} type="button" onClick={() => setGroupEmojiPicker((p) => !p)} title="Emoji" style={{ width: '36px', height: '36px', borderRadius: '10px', border: '1px solid var(--border-color)', background: groupEmojiPicker ? '#F5F0FF' : '#FFFFFF', color: groupEmojiPicker ? '#7C3AED' : '#64748B', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
                 <Smile size={16} />
               </button>
             </div>
@@ -2651,6 +2928,7 @@ export default function UserMessages() {
               type="text"
               value={groupInputText}
               onChange={(e) => setGroupInputText(e.target.value)}
+              onPaste={(e) => handlePasteAttachment(e, setGroupAttachment)}
               placeholder={`Nhắn tin vào nhóm ${activeGroup.name}...`}
               style={{ flex: 1, padding: '10px 16px', borderRadius: '12px', border: '1.5px solid var(--border-color)', fontSize: '13.5px', outline: 'none', backgroundColor: '#F8FAFC' }}
             />
@@ -2776,6 +3054,83 @@ export default function UserMessages() {
                 {repairMojibake(mediaPreviewModal.name)}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ====== MODAL CHỌN QUÁN GỢI Ý CHO BẠN ====== */}
+      {showVenuePicker && (
+        <div
+          onClick={() => setShowVenuePicker(false)}
+          style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(4px)', zIndex: 99998, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', animation: 'fadeIn 0.15s ease-out' }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ backgroundColor: '#FFFFFF', borderRadius: '20px', width: '100%', maxWidth: '460px', maxHeight: '80vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 25px 50px rgba(0,0,0,0.25)' }}
+          >
+            <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ fontSize: '17px', fontWeight: '900', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <MapPin size={20} color="#FF5722" /> Gợi ý quán cho {activeConversation?.buddy?.fullName || 'bạn'}
+              </h3>
+              <button onClick={() => setShowVenuePicker(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}><X size={20} /></button>
+            </div>
+
+            <div style={{ padding: '14px 24px 0' }}>
+              <div style={{ position: 'relative' }}>
+                <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                <input
+                  type="text"
+                  value={venueSearch}
+                  onChange={(e) => setVenueSearch(e.target.value)}
+                  placeholder="Tìm theo tên quán hoặc địa chỉ..."
+                  autoFocus
+                  style={{ width: '100%', padding: '10px 14px 10px 36px', borderRadius: '12px', border: '1.5px solid var(--border-color)', fontSize: '13.5px', outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+            </div>
+
+            <div style={{ flex: 1, overflowY: 'auto', padding: '14px 24px 20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {loadingVenues ? (
+                <div style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)' }}>
+                  <Loader2 size={22} className="spinner" />
+                </div>
+              ) : filteredVenueOptions.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)', backgroundColor: '#F8FAFC', borderRadius: '12px', fontSize: '13px' }}>
+                  Không tìm thấy quán phù hợp
+                </div>
+              ) : (
+                filteredVenueOptions.map((venue) => {
+                  const isSendingThis = sendingVenueId === venue._id;
+                  const thumb = venue.images?.[0] || venue.image;
+                  return (
+                    <button
+                      key={venue._id}
+                      type="button"
+                      onClick={() => handleSendVenue(venue)}
+                      disabled={Boolean(sendingVenueId)}
+                      style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', borderRadius: '12px', border: '1.5px solid var(--border-color)', backgroundColor: '#FFFFFF', cursor: sendingVenueId ? 'wait' : 'pointer', textAlign: 'left', width: '100%', transition: 'border-color 0.15s' }}
+                      onMouseEnter={(e) => (e.currentTarget.style.borderColor = '#FF5722')}
+                      onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border-color)')}
+                    >
+                      {thumb ? (
+                        <img src={thumb} alt={venue.name} style={{ width: '52px', height: '52px', borderRadius: '10px', objectFit: 'cover', flexShrink: 0 }} />
+                      ) : (
+                        <div style={{ width: '52px', height: '52px', borderRadius: '10px', backgroundColor: '#FFF3E0', color: '#FF5722', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                          <Coffee size={22} />
+                        </div>
+                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: '13.5px', fontWeight: '800', color: 'var(--text-primary)' }}>{venue.name}</div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{venue.address}</div>
+                      </div>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: '800', color: '#FF5722', flexShrink: 0 }}>
+                        {isSendingThis ? <Loader2 size={14} className="spinner" /> : <Send size={14} />} Gửi
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
           </div>
         </div>
       )}
