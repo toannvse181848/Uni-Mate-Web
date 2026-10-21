@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState } from 'react';
 import { authApi, userApi } from '../services/api';
 import { getAvatarUrl } from '../constants/avatar';
 import { setAnalyticsUser, trackEvent } from '../utils/analytics';
+import { getAttribution } from '../utils/attribution';
 
 const AuthContext = createContext();
 
@@ -43,15 +44,8 @@ export const AuthProvider = ({ children }) => {
     return null;
   });
 
-  const login = async (email, password, role = 'user') => {
-    // Chỉ cho phép đăng nhập qua backend API thật
-    const res = await authApi.login(email, password);
-
-    if (!res?.data?.token || !res?.data?.user) {
-      throw new Error('Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin.');
-    }
-
-    const { token, user: dbUser } = res.data;
+  // Lưu phiên đăng nhập (token + thông tin người dùng) — dùng chung cho đăng nhập email và Google
+  const startSession = (token, dbUser) => {
     localStorage.setItem('unimate_token', token);
     localStorage.setItem('unimate_login_time', Date.now().toString());
 
@@ -71,25 +65,54 @@ export const AuthProvider = ({ children }) => {
       businessName: dbUser.partnerProfile?.businessName || '',
       status: dbUser.status || 'active',
       uniCoin: dbUser.uniCoin || 0,
-      isPremium: Boolean(dbUser.isPremium || dbUser.studentProfile?.isPremium),
-      premiumPlan: dbUser.premiumPlan || dbUser.studentProfile?.premiumPlan || null,
-      premiumExpiresAt: dbUser.premiumExpiresAt || dbUser.studentProfile?.premiumExpiresAt || null,
-      isVerifiedStudent: Boolean(
-        dbUser.isPremium ||
-        dbUser.isVerifiedStudent ||
-        dbUser.studentProfile?.isPremium ||
-        dbUser.studentProfile?.isVerifiedStudent
-      ),
+      // Backend đã tính isPremium / isVerifiedStudent theo hạn gói. Cờ thô studentProfile.isPremium
+      // vẫn là true sau khi hết hạn nên không dùng (trước đây Premium hết hạn vẫn hiện như còn)
+      isPremium: Boolean(dbUser.isPremium),
+      premiumPlan: dbUser.premiumPlan || null,
+      premiumExpiresAt: dbUser.premiumExpiresAt || null,
+      isVerifiedStudent: Boolean(dbUser.isVerifiedStudent),
       trustScore: dbUser.trustScore || 0,
       interests: dbUser.studentProfile?.interests || [],
       bio: dbUser.studentProfile?.bio || '',
+      isProfileCompleted: Boolean(dbUser.isProfileCompleted),
     };
 
     setUser(authenticatedUser);
     localStorage.setItem('unimate_portal_user', JSON.stringify(authenticatedUser));
     setAnalyticsUser(authenticatedUser);
-    trackEvent('login', { method: 'email', account_role: normalizedRole });
     return authenticatedUser;
+  };
+
+  const login = async (email, password) => {
+    // Chỉ cho phép đăng nhập qua backend API thật
+    const res = await authApi.login(email, password);
+
+    if (!res?.data?.token || !res?.data?.user) {
+      throw new Error('Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin.');
+    }
+
+    const authenticatedUser = startSession(res.data.token, res.data.user);
+    trackEvent('login', { method: 'email', account_role: authenticatedUser.role });
+    return authenticatedUser;
+  };
+
+  // credential: ID token từ nút "Đăng nhập bằng Google"; heardFrom: câu trả lời ở trang Đăng ký (nếu có)
+  const loginWithGoogle = async (credential, heardFrom = null) => {
+    const res = await authApi.googleLogin({
+      credential,
+      acquisition: { ...getAttribution(), heardFrom },
+    });
+    if (!res?.data?.token || !res?.data?.user) {
+      throw new Error('Đăng nhập Google thất bại. Vui lòng thử lại.');
+    }
+
+    const authenticatedUser = startSession(res.data.token, res.data.user);
+    trackEvent(res.data.isNewUser ? 'sign_up' : 'login', {
+      method: 'google',
+      account_role: authenticatedUser.role,
+      ...(res.data.isNewUser ? { heard_from: heardFrom || 'not_set' } : {}),
+    });
+    return { user: authenticatedUser, isNewUser: Boolean(res.data.isNewUser) };
   };
 
   const register = async (userData) => {
@@ -104,6 +127,8 @@ export const AuthProvider = ({ children }) => {
       major: userData.major,
       studentId: userData.studentId,
       businessName: userData.businessName,
+      // Nguồn biết đến UNI-MATE: mã UTM của link đã mở + người dùng tự chọn
+      acquisition: { ...getAttribution(), heardFrom: userData.heardFrom || null },
     });
 
     if (!res?.data?.token || !res?.data?.user) {
@@ -138,7 +163,7 @@ export const AuthProvider = ({ children }) => {
     setUser(registeredUser);
     localStorage.setItem('unimate_portal_user', JSON.stringify(registeredUser));
     setAnalyticsUser(registeredUser);
-    trackEvent('sign_up', { method: 'email', account_role: normalizedRole });
+    trackEvent('sign_up', { method: 'email', account_role: normalizedRole, heard_from: userData.heardFrom || 'not_set' });
     return registeredUser;
   };
 
@@ -182,7 +207,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, register, logout, setUser, updateUser, upgradePremium, reloadUser }}>
+    <AuthContext.Provider value={{ user, login, loginWithGoogle, register, logout, setUser, updateUser, upgradePremium, reloadUser }}>
       {children}
     </AuthContext.Provider>
   );

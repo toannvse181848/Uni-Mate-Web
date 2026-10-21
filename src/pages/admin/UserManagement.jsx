@@ -4,7 +4,6 @@ import {
   Search,
   Filter,
   ShieldCheck,
-  ShieldAlert,
   Ban,
   CheckCircle2,
   GraduationCap,
@@ -19,6 +18,12 @@ import {
 } from 'lucide-react';
 import { userApi } from '../../services/api';
 
+// Premium còn hạn (giống backend utils/subscription.isPremiumActive): cờ isPremium vẫn là true sau khi hết hạn
+const isPremiumActive = (sp) =>
+  Boolean(sp?.isPremium && (!sp.premiumExpiresAt || new Date(sp.premiumExpiresAt) > new Date()));
+const hasBlueTick = (u) => isPremiumActive(u.studentProfile) || Boolean(u.studentProfile?.isVerifiedStudent);
+const isPremiumExpired = (sp) => Boolean(sp?.isPremium && sp.premiumExpiresAt && new Date(sp.premiumExpiresAt) <= new Date());
+
 export default function UserManagement() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -26,6 +31,9 @@ export default function UserManagement() {
   const [roleFilter, setRoleFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [total, setTotal] = useState(0);
+  // Backend trả mỗi trang 20 người, mới nhất trước
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
   const [actionLoading, setActionLoading] = useState(null);
   const [toast, setToast] = useState(null);
   const [exportLoading, setExportLoading] = useState(false);
@@ -46,7 +54,7 @@ export default function UserManagement() {
   const fetchUsers = useCallback(async () => {
     try {
       setLoading(true);
-      const params = {};
+      const params = { page };
       if (search.trim()) params.search = search.trim();
       if (roleFilter) params.role = roleFilter;
       if (statusFilter) params.status = statusFilter;
@@ -54,12 +62,13 @@ export default function UserManagement() {
       const res = await userApi.getAllUsers(params);
       setUsers(res.data || []);
       setTotal(res.total || 0);
+      setTotalPages(Math.max(1, res.totalPages || 1));
     } catch (err) {
       console.error('Lỗi tải danh sách người dùng:', err);
     } finally {
       setLoading(false);
     }
-  }, [search, roleFilter, statusFilter]);
+  }, [search, roleFilter, statusFilter, page]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -69,7 +78,8 @@ export default function UserManagement() {
   }, [fetchUsers]);
 
   const handleToggleStatus = async (user) => {
-    const newStatus = user.status === 'active' ? 'suspended' : 'active';
+    // Chỉ tài khoản đang bị khoá mới được "Mở khoá"; còn lại (hoạt động / quán chờ duyệt) là "Khoá"
+    const newStatus = user.status === 'suspended' ? 'active' : 'suspended';
     const confirmMsg = newStatus === 'suspended'
       ? `Bạn có chắc chắn muốn KHOÁ tài khoản "${user.fullName}" (${user.email})?`
       : `Mở khoá tài khoản "${user.fullName}" (${user.email})?`;
@@ -96,7 +106,7 @@ export default function UserManagement() {
   };
 
   const handleTogglePremium = async (user) => {
-    const isPrem = Boolean(user.studentProfile?.isPremium || user.studentProfile?.isVerifiedStudent);
+    const isPrem = hasBlueTick(user);
     const newPremium = !isPrem;
     const confirmMsg = newPremium
       ? `CẤP gói Premium & Tích xanh cho tài khoản "${user.fullName}"?`
@@ -233,7 +243,7 @@ export default function UserManagement() {
             type="text"
             placeholder="Tìm theo tên, email, MSSV, trường học..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
             style={{
               width: '100%',
               padding: '10px 12px 10px 40px',
@@ -251,7 +261,7 @@ export default function UserManagement() {
           <Filter size={16} color="var(--text-muted)" />
           <select
             value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value)}
+            onChange={(e) => { setRoleFilter(e.target.value); setPage(1); }}
             style={{
               padding: '10px 14px',
               borderRadius: '8px',
@@ -272,7 +282,7 @@ export default function UserManagement() {
         {/* Status Filter */}
         <select
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
+          onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
           style={{
             padding: '10px 14px',
             borderRadius: '8px',
@@ -286,6 +296,7 @@ export default function UserManagement() {
           <option value="">Tất cả trạng thái</option>
           <option value="active">🟢 Đang hoạt động (Active)</option>
           <option value="suspended">🔴 Bị khoá (Banned)</option>
+          <option value="pending">🟡 Quán chờ duyệt</option>
         </select>
       </div>
 
@@ -373,7 +384,7 @@ export default function UserManagement() {
                               <span style={{ fontWeight: '600', color: 'var(--text-primary)' }}>
                                 {u.studentProfile?.university || 'Chưa cập nhật trường'}
                               </span>
-                              {Boolean(u.studentProfile?.isPremium || u.studentProfile?.isVerifiedStudent) ? (
+                              {hasBlueTick(u) ? (
                                 <span
                                   style={{
                                     display: 'inline-flex',
@@ -386,7 +397,11 @@ export default function UserManagement() {
                                     fontSize: '11px',
                                     fontWeight: '800',
                                   }}
-                                  title="Tài khoản Premium (Tích xanh)"
+                                  title={
+                                    u.studentProfile?.premiumExpiresAt
+                                      ? `Premium đến ${new Date(u.studentProfile.premiumExpiresAt).toLocaleDateString('vi-VN')}`
+                                      : 'Tài khoản Premium (Tích xanh)'
+                                  }
                                 >
                                   <CheckCircle2 size={11} color="#0284C7" /> Tích Xanh
                                 </span>
@@ -403,7 +418,7 @@ export default function UserManagement() {
                                     fontWeight: '600',
                                   }}
                                 >
-                                  Thường
+                                  {isPremiumExpired(u.studentProfile) ? 'Premium đã hết hạn' : 'Thường'}
                                 </span>
                               )}
                             </div>
@@ -445,6 +460,14 @@ export default function UserManagement() {
                           }}>
                             <Ban size={12} /> Đã bị khoá
                           </span>
+                        ) : u.status === 'pending' ? (
+                          <span title="Quán mới đăng ký: duyệt quán ở mục Quản lý địa điểm là tài khoản được kích hoạt" style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '4px',
+                            backgroundColor: '#FFFBEB', color: '#B45309',
+                            padding: '4px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '700'
+                          }}>
+                            Chờ duyệt quán
+                          </span>
                         ) : (
                           <span style={{
                             display: 'inline-flex', alignItems: 'center', gap: '4px',
@@ -470,19 +493,19 @@ export default function UserManagement() {
                                 fontWeight: '700',
                                 cursor: 'pointer',
                                 border: '1px solid',
-                                borderColor: Boolean(u.studentProfile?.isPremium || u.studentProfile?.isVerifiedStudent) ? '#BAE6FD' : '#FED7AA',
-                                backgroundColor: Boolean(u.studentProfile?.isPremium || u.studentProfile?.isVerifiedStudent) ? '#F0F9FF' : '#FFF7ED',
-                                color: Boolean(u.studentProfile?.isPremium || u.studentProfile?.isVerifiedStudent) ? '#0369A1' : '#C2410C',
+                                borderColor: hasBlueTick(u) ? '#BAE6FD' : '#FED7AA',
+                                backgroundColor: hasBlueTick(u) ? '#F0F9FF' : '#FFF7ED',
+                                color: hasBlueTick(u) ? '#0369A1' : '#C2410C',
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 gap: '5px',
                               }}
-                              title={Boolean(u.studentProfile?.isPremium || u.studentProfile?.isVerifiedStudent) ? 'Bấm để thu hồi Premium & Tích xanh' : 'Bấm để cấp Premium & Tích xanh'}
+                              title={hasBlueTick(u) ? 'Bấm để thu hồi Premium & Tích xanh' : 'Bấm để cấp Premium & Tích xanh'}
                             >
-                              <Crown size={13} color={Boolean(u.studentProfile?.isPremium || u.studentProfile?.isVerifiedStudent) ? '#0284C7' : '#EA580C'} />
+                              <Crown size={13} color={hasBlueTick(u) ? '#0284C7' : '#EA580C'} />
                               {actionLoading === `prem_${u._id}`
                                 ? '...'
-                                : Boolean(u.studentProfile?.isPremium || u.studentProfile?.isVerifiedStudent)
+                                : hasBlueTick(u)
                                 ? 'Thu hồi Tích xanh'
                                 : 'Cấp Tích xanh'}
                             </button>
@@ -523,6 +546,32 @@ export default function UserManagement() {
             </tbody>
           </table>
         </div>
+
+        {totalPages > 1 && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '14px 20px', borderTop: '1px solid var(--border-color)', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+              Trang {page} / {totalPages} · {total} người dùng
+            </span>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1 || loading}
+                style={{ padding: '8px 14px', borderRadius: '10px', border: '1px solid var(--border-color)', backgroundColor: '#FFFFFF', fontWeight: '600', fontSize: '13px', cursor: page <= 1 ? 'not-allowed' : 'pointer', opacity: page <= 1 ? 0.5 : 1 }}
+              >
+                ← Trang trước
+              </button>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages || loading}
+                style={{ padding: '8px 14px', borderRadius: '10px', border: '1px solid var(--border-color)', backgroundColor: '#FFFFFF', fontWeight: '600', fontSize: '13px', cursor: page >= totalPages ? 'not-allowed' : 'pointer', opacity: page >= totalPages ? 0.5 : 1 }}
+              >
+                Trang sau →
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

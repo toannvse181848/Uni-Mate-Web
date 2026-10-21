@@ -32,6 +32,9 @@ client.interceptors.response.use(
     const wrapped = new Error(message);
     // Không có response = lỗi mạng hoặc timeout (vd: server Render free đang khởi động)
     wrapped.isNetworkError = !error.response;
+    // Mã lỗi riêng của backend (VD: 'MEETUP_QUOTA' = hết lượt rủ cafe miễn phí)
+    wrapped.code = error.response?.data?.code || null;
+    wrapped.status = error.response?.status || null;
     return Promise.reject(wrapped);
   }
 );
@@ -62,6 +65,11 @@ export const authApi = {
   },
   register: async (userData) => {
     const res = await client.post('/api/auth/register', userData);
+    return res.data;
+  },
+  // { credential, acquisition } — credential là ID token từ nút Google
+  googleLogin: async (data) => {
+    const res = await client.post('/api/auth/google', data);
     return res.data;
   },
   getMe: async () => {
@@ -261,6 +269,28 @@ export const matchApi = {
   },
 };
 
+// === RỦ CAFE (hẹn gặp tại quán đối tác) ===
+export const meetupApi = {
+  getQuota: async () => {
+    const res = await client.get('/api/meetups/quota');
+    return res.data;
+  },
+  // { matchId, venueId, scheduledAt? }
+  create: async (payload) => {
+    const res = await client.post('/api/meetups', payload);
+    return res.data;
+  },
+  // action: 'accept' | 'decline'
+  respond: async (meetupId, action) => {
+    const res = await client.post(`/api/meetups/${meetupId}/respond`, { action });
+    return res.data;
+  },
+  cancel: async (meetupId) => {
+    const res = await client.post(`/api/meetups/${meetupId}/cancel`);
+    return res.data;
+  },
+};
+
 // === CHAT API ===
 export const chatApi = {
   getConversations: async () => {
@@ -336,10 +366,12 @@ export const reportApi = {
     const res = await client.get('/api/reports', { params });
     return res.data;
   },
-  resolveReport: async (id, status, adminNote) => {
+  // suspendTarget: khoá luôn tài khoản bị báo cáo (chỉ với báo cáo người dùng)
+  resolveReport: async (id, status, adminNote, suspendTarget = false) => {
     const res = await client.patch(`/api/reports/${id}`, {
       status,
       adminNote,
+      suspendTarget,
     });
     return res.data;
   },
@@ -458,6 +490,23 @@ export const orderApi = {
 export const adminApi = {
   getStats: async () => {
     const res = await client.get('/api/admin/stats');
+    return res.data;
+  },
+  // Bảng số liệu tổng hợp OC3
+  getOc3: async () => {
+    const res = await client.get('/api/admin/oc3');
+    return res.data;
+  },
+  exportOc3: async () => {
+    const res = await client.get('/api/admin/oc3/export', { responseType: 'blob' });
+    return res.data;
+  },
+  getOc3Settings: async () => {
+    const res = await client.get('/api/admin/oc3/settings');
+    return res.data;
+  },
+  saveOc3Settings: async (data) => {
+    const res = await client.put('/api/admin/oc3/settings', data);
     return res.data;
   },
 };

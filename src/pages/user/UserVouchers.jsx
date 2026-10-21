@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { describeVoucher } from '../../utils/voucher';
 import {
   Ticket,
   QrCode,
@@ -11,6 +12,7 @@ import {
   Loader2,
   AlertCircle,
   RefreshCw,
+  Crown,
 } from 'lucide-react';
 import { voucherApi } from '../../services/api';
 import { trackEvent } from '../../utils/analytics';
@@ -18,6 +20,9 @@ import { trackEvent } from '../../utils/analytics';
 export default function UserVouchers() {
   const navigate = useNavigate();
   const { user, reloadUser } = useAuth();
+  const hasActivePremium = Boolean(
+    user?.isPremium && (!user.premiumExpiresAt || new Date(user.premiumExpiresAt) > new Date())
+  );
   const [activeTab, setActiveTab] = useState('my_vouchers');
   const [selectedVoucher, setSelectedVoucher] = useState(null);
   const [copiedCode, setCopiedCode] = useState(false);
@@ -97,16 +102,16 @@ export default function UserVouchers() {
       isUnlimited: Boolean(v.isUnlimited),
       coinCost: Number(v.coinCost) || 0,
       qrPayload: isWalletItem ? raw.qrPayload : null,
+      // Nhận qua buổi "Rủ cafe" (ưu đãi hẹn cafe của quán)
+      fromMeetup: Boolean(isWalletItem && (raw.meetupId || v.meetupReward)),
       title: v.title || 'Voucher',
       brand: venue?.name || '—',
       logo: '🎟️',
       expiry: v.validUntil ? new Date(v.validUntil).toLocaleDateString('vi-VN') : '—',
-      discount: v.discountPercent
-        ? `-${v.discountPercent}%`
-        : v.discountAmount
-        ? `-${v.discountAmount.toLocaleString('vi-VN')}đ`
-        : '—',
-      minOrder: v.minBill ? `Từ ${v.minBill.toLocaleString('vi-VN')}đ` : 'Không giới hạn',
+      // Nhãn giá trị do backend tính, giống hệt trang quán
+      discount: describeVoucher(v).discountShort,
+      discountLabel: describeVoucher(v).discountLabel,
+      minOrder: describeVoucher(v).conditionLabel,
       description: v.description || (v.terms || []).join(' · '),
       status: isWalletItem ? raw.status : 'available',
     };
@@ -131,6 +136,9 @@ export default function UserVouchers() {
           </h1>
           <p style={{ fontSize: '14px', color: 'var(--text-secondary)', marginTop: '4px' }}>
             Xuất trình mã QR tại quán cafe để nhân viên đối tác quét và áp dụng giảm giá trực tiếp.
+          </p>
+          <p style={{ fontSize: '13px', color: '#C2410C', marginTop: '6px', fontWeight: '600' }}>
+            🤝 Mẹo: vào <Link to="/user/messages" style={{ color: '#C2410C' }}>Tin nhắn</Link>, bấm "Rủ đi cafe" với bạn đã kết bạn. Bạn ấy đồng ý là cả hai nhận thêm ưu đãi hẹn cafe của quán.
           </p>
         </div>
 
@@ -216,7 +224,7 @@ export default function UserVouchers() {
             cursor: 'pointer',
           }}
         >
-          Đổi điểm UniCoin lấy Voucher 🪙
+          Kho voucher của quán 🎟️
         </button>
       </div>
 
@@ -303,13 +311,21 @@ export default function UserVouchers() {
                   <span style={{ fontSize: '11px', fontWeight: '800', padding: '2px 8px', borderRadius: '6px', backgroundColor: vch.codeType === 'unique' ? '#EDE9FE' : '#F1F5F9', color: vch.codeType === 'unique' ? '#6D28D9' : '#475569' }}>
                     {vch.codeType === 'unique' ? 'Mã riêng' : 'Mã chung'}
                   </span>
+                  {vch.fromMeetup && (
+                    <span style={{ fontSize: '11px', fontWeight: '800', padding: '2px 8px', borderRadius: '6px', backgroundColor: '#FFEDD5', color: '#C2410C' }}>
+                      🤝 Ưu đãi hẹn cafe
+                    </span>
+                  )}
                   <span style={{ fontSize: '13px', fontWeight: '800', color: '#1E293B', letterSpacing: '0.5px' }}>
                     Mã: <code style={{ backgroundColor: '#F8FAFC', padding: '1px 6px', borderRadius: '4px', border: '1px solid #E2E8F0', color: '#EA580C' }}>{vch.displayCode || vch.code}</code>
                   </span>
                 </div>
-                <h3 style={{ fontSize: '15px', fontWeight: '800', color: 'var(--text-primary)', marginBottom: '6px' }}>
+                <h3 style={{ fontSize: '15px', fontWeight: '800', color: 'var(--text-primary)', marginBottom: '2px' }}>
                   {vch.title}
                 </h3>
+                <div style={{ fontSize: '12.5px', fontWeight: '700', color: '#E64A19', marginBottom: '6px' }}>
+                  {vch.discountLabel}
+                </div>
                 <p style={{ fontSize: '12.5px', color: 'var(--text-secondary)', marginBottom: '14px', lineHeight: '1.5' }}>
                   {vch.description}
                 </p>
@@ -375,6 +391,8 @@ export default function UserVouchers() {
             {publicVouchers.map((raw) => {
               const vch = normalizeVoucher(raw);
               const alreadyClaimed = myVouchers.some((mv) => (mv.voucherId?._id || mv.voucherId) === raw._id);
+              // Voucher độc quyền Premium: sinh viên thường thấy nhưng phải nâng cấp mới lưu được
+              const lockedForPremium = Boolean(raw.premiumOnly) && !hasActivePremium && !alreadyClaimed;
               return (
                 <div key={vch.id} style={{ backgroundColor: '#FFFFFF', borderRadius: '18px', padding: '22px', border: '1.5px solid var(--border-color)', boxShadow: '0 4px 10px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
@@ -399,11 +417,25 @@ export default function UserVouchers() {
                         Không giới hạn
                       </span>
                     )}
+                    {raw.premiumOnly && (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '11px', fontWeight: '800', padding: '2px 8px', borderRadius: '6px', background: 'linear-gradient(135deg, #FF6F00, #FF3D00)', color: '#FFFFFF' }}>
+                        <Crown size={12} /> Độc quyền Premium
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: '12px', fontWeight: '700', color: '#E64A19', marginBottom: '4px' }}>{vch.brand}</div>
-                  <h4 style={{ fontSize: '15px', fontWeight: '800', color: 'var(--text-primary)', marginBottom: '6px' }}>{vch.title}</h4>
+                  <h4 style={{ fontSize: '15px', fontWeight: '800', color: 'var(--text-primary)', marginBottom: '2px' }}>{vch.title}</h4>
+                  <div style={{ fontSize: '12.5px', fontWeight: '700', color: '#E64A19', marginBottom: '6px' }}>{vch.discountLabel}</div>
                   <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px', lineHeight: '1.5', flex: 1 }}>{vch.description}</p>
                   <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '14px' }}>Điều kiện: {vch.minOrder} · HSD: {vch.expiry}</div>
+                  {lockedForPremium ? (
+                    <button
+                      onClick={() => navigate('/user/profile?upgrade=monthly')}
+                      style={{ padding: '10px', borderRadius: '10px', background: 'linear-gradient(135deg, #FF6F00, #FF3D00)', color: '#FFFFFF', fontSize: '13px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                    >
+                      <Crown size={14} /> Nâng cấp Premium để nhận
+                    </button>
+                  ) : (
                   <button
                     onClick={() => !alreadyClaimed && handleClaimVoucher(vch.id)}
                     disabled={alreadyClaimed || claimingId === vch.id}
@@ -412,6 +444,7 @@ export default function UserVouchers() {
                     {claimingId === vch.id ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : alreadyClaimed ? <CheckCircle2 size={14} /> : null}
                     {alreadyClaimed ? 'Đã có trong ví' : claimingId === vch.id ? 'Đang nhận...' : vch.coinCost > 0 ? `Đổi (${vch.coinCost} UniCoin)` : 'Nhận Voucher'}
                   </button>
+                  )}
                 </div>
               );
             })}

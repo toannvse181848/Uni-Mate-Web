@@ -1,16 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Heart,
   Coffee,
-  X,
   Sparkles,
   MapPin,
   GraduationCap,
   BookOpen,
   Filter,
   CheckCircle2,
-  Calendar,
-  Send,
   Search,
   RefreshCw,
   Users,
@@ -19,17 +17,20 @@ import { userApi, matchApi, onboardingApi } from '../../services/api';
 import { trackEvent } from '../../utils/analytics';
 import { formatStudentYear } from '../../constants/academic';
 import { getAvatarUrl, DEFAULT_AVATAR } from '../../constants/avatar';
+import { useAuth } from '../../context/AuthContext';
 
 
 export default function UserDiscover() {
+  const { user } = useAuth();
+  const myUniversity = user?.university || '';
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedUni, setSelectedUni] = useState('Tất cả các trường');
-  const [showInviteModal, setShowInviteModal] = useState(false);
-  const [invitedStudent, setInvitedStudent] = useState(null);
-  const [inviteSuccess, setInviteSuccess] = useState(false);
+  const navigate = useNavigate();
   const [likedMap, setLikedMap] = useState({});
+  // Bạn đã kết bạn: id người đó → matchId (để mở đúng cuộc trò chuyện và rủ cafe thật)
+  const [friendMatchIds, setFriendMatchIds] = useState({});
   const [actionLoading, setActionLoading] = useState(null);
 
   // Tải danh sách sinh viên thật từ Backend MongoDB (ưu tiên thuật toán gợi ý matching)
@@ -57,41 +58,29 @@ export default function UserDiscover() {
       }
 
       if (realData.length > 0) {
-        const formatted = realData.map((u, idx) => {
+        // Chỉ hiển thị thông tin thật người dùng đã điền — không tự đặt tuổi, ảnh, khoảng cách, điểm
+        const formatted = realData.map((u) => {
           const profile = u.studentProfile || {};
           const isReco = isAlgorithm && u.matchPercentage !== undefined;
+          const university = u.university || profile.university || '';
 
           return {
             id: u.id || u._id,
             name: u.name || u.fullName,
-            age: 20 + (idx % 4),
-            gender: (profile.gender || u.gender) === 'female' ? 'Nữ' : 'Nam',
-            university: u.university || profile.university || 'Đại học FPT TP.HCM',
-            major: u.major || profile.major || 'Kỹ thuật Phần mềm',
-            year: u.year || profile.year || 'Sinh viên năm 3',
+            university: university || 'Chưa cập nhật trường',
+            // Cùng trường với mình (thông tin thật, thay cho khoảng cách ngẫu nhiên trước đây)
+            sameSchool: Boolean(university && myUniversity && university === myUniversity),
+            major: u.major || profile.major || '',
+            year: u.year || profile.year || '',
             studentId: profile.studentId || u.studentId || '',
-            avatar:
-              u.avatar
-                ? getAvatarUrl(u.avatar)
-                : (idx % 2 === 0
-                  ? DEFAULT_AVATAR
-                  : 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=500'),
-            distance: `${(Math.random() * 2.5 + 0.4).toFixed(1)} km`,
-            trustScore: u.trustScore || profile.trustScore || 96,
+            avatar: u.avatar ? getAvatarUrl(u.avatar) : DEFAULT_AVATAR,
             isVerifiedStudent: Boolean(u.isVerifiedStudent || u.isPremium || profile.isVerifiedStudent || profile.isPremium),
             isPremium: Boolean(u.isPremium || profile.isPremium),
-            matchPercentage: isReco ? u.matchPercentage : 85 - (idx * 2 % 25),
+            // % hợp nhau chỉ có khi thuật toán gợi ý tính được
+            matchPercentage: isReco ? u.matchPercentage : null,
             commonTags: u.commonTags || [],
-            bio:
-              u.bio ||
-              profile.bio ||
-              'Tìm bạn cùng học bài & khám phá các quán cafe yên tĩnh 🚀',
-            interests:
-              (u.interests?.length > 0 ? u.interests : profile.interests?.length > 0 ? profile.interests : [
-                'Cà phê học bài',
-                'Boardgame',
-                'Kết nối bạn bè',
-              ]),
+            bio: u.bio || profile.bio || '',
+            interests: u.interests?.length > 0 ? u.interests : profile.interests || [],
           };
         });
         setStudents(formatted);
@@ -104,7 +93,7 @@ export default function UserDiscover() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [myUniversity]);
 
   useEffect(() => {
     fetchStudents();
@@ -130,6 +119,19 @@ export default function UserDiscover() {
     return matchesUni && matchesSearch;
   });
 
+  useEffect(() => {
+    matchApi
+      .getMyMatches()
+      .then((res) => {
+        const map = {};
+        (res?.data || []).forEach((m) => {
+          if (m.buddy?.id) map[String(m.buddy.id)] = m.matchId;
+        });
+        setFriendMatchIds(map);
+      })
+      .catch(() => {});
+  }, []);
+
   // Xử lý gửi lời thích / kết bạn qua API match thật
   const handleLike = async (student) => {
     try {
@@ -140,31 +142,17 @@ export default function UserDiscover() {
       if (res.isMatch) trackEvent('friend_match', { source: 'discover' });
 
       if (res.isMatch) {
+        if (res.data?._id) setFriendMatchIds((prev) => ({ ...prev, [String(student.id)]: res.data._id }));
         alert(`🎉 TUYỆT VỜI! Bạn và ${student.name} đều đã thích nhau! Hai bạn đã được kết bạn thành công, hãy vào mục Tin nhắn để trò chuyện và hẹn cafe nhé! ☕`);
       } else {
         alert(`💖 Đã gửi lượt thích đến ${student.name}! Khi bạn ấy thích lại, cả hai sẽ được kết bạn.`);
       }
     } catch (err) {
-      alert(`Đã gửi lời kết bạn thành công đến ${student.name}!`);
-      setLikedMap((prev) => ({ ...prev, [student.id]: true }));
+      // Lỗi thì báo lỗi (trước đây vẫn báo "đã gửi thành công" và đánh dấu đã thích)
+      alert(`Chưa gửi được lời kết bạn: ${err.message}`);
     } finally {
       setActionLoading(null);
     }
-  };
-
-  const handleOpenInvite = (student) => {
-    setInvitedStudent(student);
-    setShowInviteModal(true);
-    setInviteSuccess(false);
-  };
-
-  const handleSendInvite = (e) => {
-    e.preventDefault();
-    setInviteSuccess(true);
-    setTimeout(() => {
-      setShowInviteModal(false);
-      setInviteSuccess(false);
-    }, 1800);
   };
 
   return (
@@ -462,6 +450,7 @@ export default function UserDiscover() {
                   )}
 
                   {/* Distance Pill */}
+                  {student.sameSchool && (
                   <div
                     style={{
                       position: 'absolute',
@@ -481,10 +470,12 @@ export default function UserDiscover() {
                     }}
                   >
                     <MapPin size={12} color="#FFB74D" />
-                    <span>Cách {student.distance}</span>
+                    <span>Cùng trường với bạn</span>
                   </div>
+                  )}
 
                   {/* Verified Trust Badge */}
+                  {student.isVerifiedStudent && (
                   <div
                     style={{
                       position: 'absolute',
@@ -503,8 +494,9 @@ export default function UserDiscover() {
                     }}
                   >
                     <CheckCircle2 size={12} />
-                    <span>Tín nhiệm {student.trustScore}%</span>
+                    <span>Đã xác minh</span>
                   </div>
+                  )}
 
                   {/* Name & Uni Overlay */}
                   <div
@@ -565,6 +557,7 @@ export default function UserDiscover() {
                     flexDirection: 'column',
                   }}
                 >
+                  {student.bio && (
                   <div
                     style={{
                       fontSize: '12.5px',
@@ -576,6 +569,7 @@ export default function UserDiscover() {
                   >
                     "{student.bio}"
                   </div>
+                  )}
 
                   {/* Major & Favorite Cafe */}
                   <div
@@ -597,7 +591,7 @@ export default function UserDiscover() {
                     >
                       <BookOpen size={14} color="#FF5722" />
                       <span>
-                        Ngành: <strong>{student.major}</strong>
+                        Ngành: <strong>{student.major || "Chưa cập nhật"}</strong>
                       </span>
                     </div>
                   </div>
@@ -671,8 +665,10 @@ export default function UserDiscover() {
                       <span>{isLiked ? 'Đã thích ❤️' : 'Kết bạn'}</span>
                     </button>
 
+                    {friendMatchIds[String(student.id)] && (
                     <button
-                      onClick={() => handleOpenInvite(student)}
+                      onClick={() => navigate(`/user/messages?matchId=${friendMatchIds[String(student.id)]}`)}
+                      title="Mở khung chat để rủ bạn tới quán đối tác"
                       style={{
                         flex: 1.3,
                         display: 'flex',
@@ -693,220 +689,17 @@ export default function UserDiscover() {
                       <Coffee size={16} />
                       <span>Rủ đi cafe</span>
                     </button>
+                    )}
                   </div>
+                  {!friendMatchIds[String(student.id)] && (
+                    <p style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '8px', textAlign: 'center' }}>
+                      Hai bạn kết bạn xong là rủ đi cafe được, cả hai nhận ưu đãi của quán đối tác.
+                    </p>
+                  )}
                 </div>
               </div>
             );
           })}
-        </div>
-      )}
-
-      {/* Modal: Rủ đi cafe học bài */}
-      {showInviteModal && invitedStudent && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
-            backdropFilter: 'blur(4px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 100,
-            padding: '20px',
-          }}
-        >
-          <div
-            style={{
-              backgroundColor: '#FFFFFF',
-              borderRadius: '24px',
-              padding: '28px',
-              maxWidth: '460px',
-              width: '100%',
-              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: '16px',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Coffee size={22} color="#FF5722" />
-                <h3
-                  style={{
-                    fontSize: '18px',
-                    fontWeight: '800',
-                    color: 'var(--text-primary)',
-                  }}
-                >
-                  Rủ {invitedStudent.name} đi Cafe
-                </h3>
-              </div>
-              <button
-                onClick={() => setShowInviteModal(false)}
-                style={{
-                  cursor: 'pointer',
-                  color: 'var(--text-muted)',
-                  background: 'none',
-                  border: 'none',
-                }}
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            {inviteSuccess ? (
-              <div style={{ textAlign: 'center', padding: '30px 10px' }}>
-                <div
-                  style={{
-                    width: '60px',
-                    height: '60px',
-                    borderRadius: '50%',
-                    backgroundColor: '#FFF3E0',
-                    color: '#E64A19',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginBottom: '14px',
-                  }}
-                >
-                  <CheckCircle2 size={36} />
-                </div>
-                <h4
-                  style={{
-                    fontSize: '18px',
-                    fontWeight: '800',
-                    color: '#E64A19',
-                  }}
-                >
-                  Lời mời đã được gửi đi! ☕🎉
-                </h4>
-                <p
-                  style={{
-                    fontSize: '13px',
-                    color: 'var(--text-secondary)',
-                    marginTop: '6px',
-                  }}
-                >
-                  {invitedStudent.name} sẽ nhận được thông báo kèm mã giảm giá áp
-                  dụng tại quán.
-                </p>
-              </div>
-            ) : (
-              <form
-                onSubmit={handleSendInvite}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '14px',
-                }}
-              >
-                <div>
-                  <label
-                    style={{
-                      fontSize: '12px',
-                      fontWeight: '700',
-                      color: 'var(--text-secondary)',
-                    }}
-                  >
-                    Chọn Quán Cafe hẹn gặp:
-                  </label>
-                  <select
-                    style={{
-                      width: '100%',
-                      marginTop: '6px',
-                      padding: '10px 12px',
-                      borderRadius: '10px',
-                      border: '1.5px solid var(--border-color)',
-                      fontSize: '13px',
-                      outline: 'none',
-                    }}
-                  >
-                    <option>The Coffee House - Làng Đại Học (Ưu đãi SV -20%)</option>
-                    <option>Highlands Coffee - Gần trường ĐH (Tặng bánh)</option>
-                    <option>Cheese Coffee - Sư Vạn Hạnh (Giảm 15k)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label
-                    style={{
-                      fontSize: '12px',
-                      fontWeight: '700',
-                      color: 'var(--text-secondary)',
-                    }}
-                  >
-                    Thời gian hẹn:
-                  </label>
-                  <input
-                    type="datetime-local"
-                    defaultValue="2026-09-22T14:30"
-                    style={{
-                      width: '100%',
-                      marginTop: '6px',
-                      padding: '10px 12px',
-                      borderRadius: '10px',
-                      border: '1.5px solid var(--border-color)',
-                      fontSize: '13px',
-                      outline: 'none',
-                    }}
-                  />
-                </div>
-
-                <div>
-                  <label
-                    style={{
-                      fontSize: '12px',
-                      fontWeight: '700',
-                      color: 'var(--text-secondary)',
-                    }}
-                  >
-                    Lời nhắn rủ bạn:
-                  </label>
-                  <textarea
-                    rows={3}
-                    defaultValue={`Chào ${invitedStudent.name}, mình thấy bạn cũng đang tìm bạn đi cafe cày deadline. Chiều mai cùng qua quán học bài nhé! 💻`}
-                    style={{
-                      width: '100%',
-                      marginTop: '6px',
-                      padding: '10px 12px',
-                      borderRadius: '10px',
-                      border: '1.5px solid var(--border-color)',
-                      fontSize: '13px',
-                      outline: 'none',
-                    }}
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  style={{
-                    marginTop: '8px',
-                    padding: '12px',
-                    borderRadius: '12px',
-                    backgroundColor: '#FF5722',
-                    color: '#FFFFFF',
-                    fontWeight: '700',
-                    fontSize: '14px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '8px',
-                    cursor: 'pointer',
-                    border: 'none',
-                    boxShadow: '0 4px 12px rgba(255, 87, 34, 0.3)',
-                  }}
-                >
-                  <Send size={16} />
-                  <span>Gửi lời mời kèm Voucher</span>
-                </button>
-              </form>
-            )}
-          </div>
         </div>
       )}
     </div>

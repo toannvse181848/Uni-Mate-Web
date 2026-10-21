@@ -25,13 +25,17 @@ import {
   MAJORS,
   ACADEMIC_YEARS,
 } from '../constants/academic';
+import { HEARD_FROM_OPTIONS } from '../constants/acquisition';
+import GoogleSignInButton from '../components/GoogleSignInButton';
 
 export default function Register() {
   const navigate = useNavigate();
-  const { register } = useAuth();
+  const { register, loginWithGoogle } = useAuth();
   const [role, setRole] = useState('user'); // 'user' | 'partner'
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
+  // Không bắt buộc: dùng so sánh hiệu quả kênh truyền thông
+  const [heardFrom, setHeardFrom] = useState('');
 
   // Student form state - Khớp 100% với Thẻ Uni-Card Profile
   const [studentForm, setStudentForm] = useState({
@@ -108,17 +112,33 @@ export default function Register() {
         await register({
           ...studentForm,
           role: 'user',
+          heardFrom,
         });
         navigate('/onboarding');
       } else {
         await register({
           ...partnerForm,
           role: 'partner',
+          heardFrom,
         });
         navigate('/partner/dashboard');
       }
     } catch (err) {
       alert('Đăng ký thất bại: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Đăng ký nhanh bằng Google (chỉ tạo tài khoản sinh viên; quán đối tác dùng form bên trên)
+  const handleGoogleCredential = async (credential) => {
+    setLoading(true);
+    try {
+      const { user: account, isNewUser } = await loginWithGoogle(credential, heardFrom || null);
+      if (isNewUser) navigate('/onboarding');
+      else navigate(account.role === 'partner' ? '/partner/dashboard' : '/user/discover');
+    } catch (err) {
+      alert('Đăng ký Google thất bại: ' + err.message);
     } finally {
       setLoading(false);
     }
@@ -487,7 +507,7 @@ export default function Register() {
                     required
                     value={partnerForm.businessName}
                     onChange={(e) => handlePartnerChange('businessName', e.target.value)}
-                    placeholder="VD: The Coffee House - Chi nhánh Sư Vạn Hạnh"
+                    placeholder="VD: Cà phê Mây - Chi nhánh Sư Vạn Hạnh"
                     style={{ border: 'none', outline: 'none', width: '100%', fontSize: '14px', color: '#1C1917' }}
                   />
                 </div>
@@ -549,6 +569,28 @@ export default function Register() {
               </div>
             </>
           )}
+
+          {/* Nguồn biết đến UNI-MATE (không bắt buộc) */}
+          <div>
+            <label style={{ display: 'block', fontSize: '13px', fontWeight: '700', color: '#1C1917', marginBottom: '5px' }}>
+              Bạn biết UNI-MATE qua đâu?
+            </label>
+            <div style={{ display: 'flex', alignItems: 'center', border: '1.5px solid #E7E5E4', borderRadius: '12px', padding: '10px 12px' }}>
+              <Sparkles size={18} color="#A8A29E" style={{ marginRight: '8px' }} />
+              <select
+                value={heardFrom}
+                onChange={(e) => setHeardFrom(e.target.value)}
+                style={{ border: 'none', outline: 'none', width: '100%', fontSize: '13px', color: heardFrom ? '#1C1917' : '#A8A29E', backgroundColor: 'transparent' }}
+              >
+                <option value="">Chọn nguồn (không bắt buộc)</option>
+                {HEARD_FROM_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
 
           {/* Password fields */}
           <div className="grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
@@ -632,6 +674,8 @@ export default function Register() {
             <ArrowRight size={18} />
           </button>
         </form>
+
+        {role === 'user' && <GoogleSignInButton onCredential={handleGoogleCredential} text="signup_with" />}
 
         {/* Footer Login Link */}
         <div style={{ marginTop: '22px', textAlign: 'center', fontSize: '14px', color: '#78716C' }}>

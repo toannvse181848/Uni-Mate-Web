@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { userApi, authApi, orderApi } from '../../services/api';
+import { userApi, authApi, orderApi, matchApi } from '../../services/api';
 import { trackEvent, getAnalyticsClientId } from '../../utils/analytics';
 import usePremiumPlans, { PREMIUM_PLAN_LABEL, formatVnd } from '../../hooks/usePremiumPlans';
 import { getAvatarUrl } from '../../constants/avatar';
@@ -16,6 +16,7 @@ import {
   Sparkles,
   MapPin,
   Calendar,
+  CalendarCheck,
   BookOpen,
   Edit3,
   Coffee,
@@ -85,13 +86,25 @@ export default function UserProfile() {
     ? new Date(user.premiumExpiresAt).toLocaleDateString('vi-VN')
     : null;
 
+  // Số bạn đã kết nối thật (trước đây ô "Cạ cứng Match" luôn ghi 12)
+  const [friendCount, setFriendCount] = useState(null);
+  useEffect(() => {
+    matchApi
+      .getMyMatches()
+      .then((res) => setFriendCount(res?.count ?? res?.data?.length ?? 0))
+      .catch(() => {});
+  }, []);
+
   // Mở sẵn modal Premium khi vào từ link /user/profile?upgrade=monthly|yearly (vd: trang UniCoin)
   const [searchParams, setSearchParams] = useSearchParams();
+  // Modal được mở từ trang khác → đóng modal thì quay về trang đó thay vì ở lại trang Hồ sơ
+  const [openedFromOtherPage, setOpenedFromOtherPage] = useState(false);
   useEffect(() => {
     const planFromLink = searchParams.get('upgrade');
     if (!planFromLink) return;
     if (planFromLink === 'monthly' || planFromLink === 'yearly') setSelectedPlan(planFromLink);
     setShowPremiumModal(true);
+    setOpenedFromOtherPage(true);
     setSearchParams({}, { replace: true });
   }, [searchParams, setSearchParams]);
 
@@ -143,6 +156,12 @@ export default function UserProfile() {
     setShowPremiumModal(false);
     setPremiumNotice(null);
     setPaidOrder(null);
+    if (openedFromOtherPage) {
+      setOpenedFromOtherPage(false);
+      // Mở thẳng link trong tab mới thì không có trang trước để quay lại
+      if (window.history.length > 1) navigate(-1);
+      else navigate('/user/discover');
+    }
   };
 
   // Tự động kiểm tra trạng thái đơn hàng khi đang mở màn hình thanh toán VietQR
@@ -614,7 +633,7 @@ export default function UserProfile() {
                   Chuyên ngành
                 </div>
                 <div style={{ fontSize: '13px', fontWeight: '700' }}>
-                  {user?.major || 'Kỹ thuật Phần mềm'}
+                  {user?.major || 'Chưa cập nhật'}
                 </div>
               </div>
 
@@ -623,7 +642,7 @@ export default function UserProfile() {
                   Năm học
                 </div>
                 <div style={{ fontSize: '13px', fontWeight: '700' }}>
-                  {formatStudentYear(user?.year || 'Sinh viên năm 3')}
+                  {user?.year ? formatStudentYear(user.year) : 'Chưa cập nhật'}
                 </div>
               </div>
 
@@ -643,8 +662,9 @@ export default function UserProfile() {
             }}
           >
             <div style={{ backgroundColor: '#FFFFFF', padding: '16px', borderRadius: '16px', border: '1px solid var(--border-color)', textAlign: 'center' }}>
-              <div style={{ fontSize: '22px', fontWeight: '900', color: '#FF5722' }}>98%</div>
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '600' }}>Tín nhiệm SV</div>
+              {/* Gói hiện tại (trước đây ô "Tín nhiệm SV" luôn ghi 98%) */}
+              <div style={{ fontSize: '22px', fontWeight: '900', color: '#FF5722' }}>{user?.isPremium ? 'Premium' : 'Miễn phí'}</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '600' }}>Gói tài khoản</div>
             </div>
             <div
               onClick={() => navigate('/user/unicoin')}
@@ -655,8 +675,8 @@ export default function UserProfile() {
               <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '600' }}>UniCoin ⭐</div>
             </div>
             <div style={{ backgroundColor: '#FFFFFF', padding: '16px', borderRadius: '16px', border: '1px solid var(--border-color)', textAlign: 'center' }}>
-              <div style={{ fontSize: '22px', fontWeight: '900', color: '#6366F1' }}>12</div>
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '600' }}>Cạ cứng Match</div>
+              <div style={{ fontSize: '22px', fontWeight: '900', color: '#6366F1' }}>{friendCount ?? '—'}</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '600' }}>Bạn bè đã kết nối</div>
             </div>
           </div>
         </div>
@@ -1356,11 +1376,29 @@ export default function UserProfile() {
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: '#334155' }}>
+                      <div style={{ width: '24px', height: '24px', borderRadius: '50%', backgroundColor: '#FCE7F3', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        <Heart size={14} color="#DB2777" />
+                      </div>
+                      <div>
+                        <strong>Xem ai đã thích bạn:</strong> Biết ngay ai đã thả tim và kết bạn chỉ với 1 chạm.
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: '#334155' }}>
+                      <div style={{ width: '24px', height: '24px', borderRadius: '50%', backgroundColor: '#FFEDD5', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        <CalendarCheck size={14} color="#EA580C" />
+                      </div>
+                      <div>
+                        <strong>Rủ cafe không giới hạn:</strong> Tài khoản miễn phí rủ được 3 lần mỗi tuần. Mỗi buổi hẹn được chốt, cả hai nhận ưu đãi của quán.
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: '#334155' }}>
                       <div style={{ width: '24px', height: '24px', borderRadius: '50%', backgroundColor: '#E0F2FE', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                         <CheckCircle2 size={15} color="#0284C7" />
                       </div>
                       <div>
-                        <strong>Tích xanh xác thực chính chủ:</strong> Tăng uy tín và 3x tỷ lệ phản hồi kết nối.
+                        <strong>Tích xanh xác thực chính chủ:</strong> Hồ sơ có tích xanh, bạn học yên tâm hơn khi kết bạn.
                       </div>
                     </div>
 
@@ -1369,7 +1407,7 @@ export default function UserProfile() {
                         <Zap size={14} color="#D97706" />
                       </div>
                       <div>
-                        <strong>Ưu tiên gợi ý kết bạn:</strong> Hồ sơ xuất hiện hàng đầu trong trang Khám phá.
+                        <strong>Ưu tiên gợi ý kết bạn:</strong> Hồ sơ được xếp sớm hơn trong trang Khám phá của sinh viên khác.
                       </div>
                     </div>
 
@@ -1378,7 +1416,7 @@ export default function UserProfile() {
                         <Coffee size={14} color="#15803D" />
                       </div>
                       <div>
-                        <strong>Ưu đãi Cafe đối tác:</strong> Nhận voucher giảm giá độc quyền đến 50%.
+                        <strong>Voucher cafe độc quyền:</strong> Mở khoá các voucher quán đối tác chỉ dành cho thành viên Premium.
                       </div>
                     </div>
                   </div>
@@ -1500,10 +1538,7 @@ export default function UserProfile() {
                             type: 'success',
                             text: res.message || 'Nâng cấp Premium thành công! Tài khoản đã được cấp tích xanh.',
                           });
-                          setTimeout(() => {
-                            setShowPremiumModal(false);
-                            setPremiumNotice(null);
-                          }, 1800);
+                          setTimeout(closePremiumModal, 1800);
                         } catch (err) {
                           setPremiumNotice({ type: 'error', text: err.message || 'Có lỗi xảy ra.' });
                         } finally {
